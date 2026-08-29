@@ -98,6 +98,11 @@ def test_expand_handles_glob_metachars_in_filename(tmp_path):
     # 存在しないパスは glob パターンとして扱う
     assert _expand(str(tmp_path / "*.html")) == [f]
     assert _expand(str(tmp_path / "nothing*.html")) == []
+    # 「ウェブページ、完全」の付随フォルダ (<name>_files/) 内の HTML は再帰 glob から除外
+    sub = tmp_path / "page_files"
+    sub.mkdir()
+    (sub / "frame.html").write_text("x", encoding="utf-8")
+    assert _expand(str(tmp_path / "**" / "*.html")) == [f]
 
 
 def test_unknown_file_raises(tmp_path):
