@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from portfolio.models import Fund, Holding, Order
+from portfolio.models import Balance, Fund, Holding, Order
 
 DEFAULT_DB = Path("portfolio.db")
 
@@ -98,6 +98,28 @@ CREATE TABLE IF NOT EXISTS funds (
 );
 CREATE INDEX IF NOT EXISTS idx_funds_date ON funds (snapshot_date);
 
+CREATE TABLE IF NOT EXISTS balances (
+    id                 INTEGER PRIMARY KEY,
+    snapshot_date      TEXT NOT NULL,
+    broker             TEXT NOT NULL,
+    category           TEXT NOT NULL,
+    label              TEXT NOT NULL,
+    market_value_jpy   REAL,
+    unrealized_pnl_jpy REAL,
+    unrealized_pnl_pct REAL,
+    day_change_jpy     REAL,
+    day_change_pct     REAL,
+    month_change_jpy   REAL,
+    month_change_pct   REAL,
+    realized_pnl_jpy   REAL,
+    is_cash            INTEGER NOT NULL DEFAULT 0,
+    is_total           INTEGER NOT NULL DEFAULT 0,
+    source_file        TEXT,
+    imported_at        TEXT NOT NULL,
+    UNIQUE (snapshot_date, broker, category)
+);
+CREATE INDEX IF NOT EXISTS idx_balances_date ON balances (snapshot_date);
+
 CREATE TABLE IF NOT EXISTS raw_imports (
     id            INTEGER PRIMARY KEY,
     snapshot_date TEXT NOT NULL,
@@ -124,6 +146,11 @@ CREATE VIEW IF NOT EXISTS latest_funds AS
 SELECT f.* FROM funds f
 JOIN (SELECT broker, MAX(snapshot_date) AS d FROM funds GROUP BY broker) m
   ON f.broker = m.broker AND f.snapshot_date = m.d;
+
+CREATE VIEW IF NOT EXISTS latest_balances AS
+SELECT b.* FROM balances b
+JOIN (SELECT broker, MAX(snapshot_date) AS d FROM balances GROUP BY broker) m
+  ON b.broker = m.broker AND b.snapshot_date = m.d;
 """
 
 # 既存DBへの追加列（列名, 定義）。CREATE TABLE 側にも同じ列を入れておくこと。
@@ -149,6 +176,13 @@ _FUND_COLS = [
     "snapshot_date", "broker", "account_type", "is_nisa", "name", "units", "selling_units",
     "nav", "avg_cost", "market_value_jpy", "acquisition_amount_jpy", "unrealized_pnl_jpy",
     "unrealized_pnl_pct", "day_change_jpy", "day_change_pct", "is_accumulating", "source_file",
+]
+
+
+_BALANCE_COLS = [
+    "snapshot_date", "broker", "category", "label", "market_value_jpy", "unrealized_pnl_jpy",
+    "unrealized_pnl_pct", "day_change_jpy", "day_change_pct", "month_change_jpy", "month_change_pct",
+    "realized_pnl_jpy", "is_cash", "is_total", "source_file",
 ]
 
 
@@ -197,6 +231,12 @@ def upsert_funds(conn: sqlite3.Connection, funds: list[Fund]) -> int:
     """同一 (snapshot_date, broker, account_type, name) は上書き。"""
     return _upsert(conn, "funds", _FUND_COLS, "snapshot_date, broker, account_type, name",
                    [f.to_row() for f in funds])
+
+
+def upsert_balances(conn: sqlite3.Connection, balances: list[Balance]) -> int:
+    """同一 (snapshot_date, broker, category) は上書き。"""
+    return _upsert(conn, "balances", _BALANCE_COLS, "snapshot_date, broker, category",
+                   [b.to_row() for b in balances])
 
 
 def record_raw_import(conn: sqlite3.Connection, *, snapshot_date: str, broker: str,

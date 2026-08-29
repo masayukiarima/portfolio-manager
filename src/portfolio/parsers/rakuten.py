@@ -45,7 +45,74 @@ def parse(html: str, year_hint: int | None = None) -> ParseResult:
 
     if rows == 0:
         warnings.append("楽天: 明細行が1件も見つかりませんでした")
-    return ParseResult("rakuten", snapshot_date, holdings, warnings)
+    balances = parse_balances(soup, snapshot_date or date.today())
+    return ParseResult("rakuten", snapshot_date, holdings, warnings, balances=balances)
+
+
+# 画面表記 → (正規化区分, 現金同等物か, 合計行か)
+_BALANCE_MAP = {
+    "資産合計": ("合計", False, True),
+    "保有商品の評価額合計": ("保有商品合計", False, True),
+    "国内株式": ("国内株式", False, False),
+    "米国株式": ("米国株式", False, False),
+    "中国株式": ("中国株式", False, False),
+    "アセアン株式": ("アセアン株式", False, False),
+    "投資信託": ("投資信託", False, False),
+    "楽天・マネーファンド": ("MRF", True, False),
+    "外貨建MMF": ("外貨建MMF", True, False),
+    "国内債券": ("国内債券", False, False),
+    "外国債券": ("外国債券", False, False),
+    "金・プラチナ": ("金・プラチナ", False, False),
+    "預り金合計": ("預り金合計", True, True),
+    "預り金": ("預り金(JPY)", True, False),
+    "外貨預り金": ("預り金(外貨)", True, False),
+    "信用保証金": ("信用保証金", True, False),
+    "信用評価損益": ("信用評価損益", False, False),
+    "FX証拠金（純資産）": ("FX証拠金", True, False),
+    "楽天銀行普通預金残高": ("銀行口座", True, False),
+}
+_TOKEN_RE = re.compile(r"([+-]?\d[\d,]*(?:\.\d+)?)\s*(円|％|%)|(?<![\d,])(-)(?![\d,])")
+
+
+def _tokens(text: str) -> list[float | None]:
+    """'-70,809 円 +156,676 円 +704,301 円 -3.58 % +8.94 % -' → [day, month, pnl, day%, month%, pnl%]"""
+    out: list[float | None] = []
+    for num, _unit, dash in _TOKEN_RE.findall(text):
+        out.append(None if dash else to_float(num))
+    return out
+
+
+def parse_balances(soup: BeautifulSoup, snap: date) -> list["Balance"]:
+    """保有商品一覧の上部にある資産残高テーブル (table.balance-tbl) を読む。"""
+    from portfolio.models import Balance
+
+    table = soup.find("table", class_="balance-tbl")
+    if table is None:
+        return []
+    out: list[Balance] = []
+    for tr in table.find_all("tr"):
+        tds = tr.find_all("td", recursive=False)
+        if len(tds) < 2:
+            continue
+        label = re.sub(r"\s*→.*$", "", tds[0].get_text(" ", strip=True))  # '預り金合計 →口座明細' 等のリンクを除去
+        if label not in _BALANCE_MAP:
+            continue
+        cat, is_cash, is_total = _BALANCE_MAP[label]
+        mv = to_float(tds[1].get_text(" ", strip=True))
+        if mv is None:
+            continue
+        t = _tokens(tds[2].get_text(" ", strip=True)) if len(tds) > 2 else []
+        t += [None] * (6 - len(t))
+        realized = to_float(tds[4].get_text(" ", strip=True)) if len(tds) > 4 else None
+        if mv == 0 and not is_total and not any(v for v in t[:3]):
+            continue  # 保有の無い区分は省く
+        out.append(Balance(
+            snapshot_date=snap, broker="rakuten", category=cat, label=label,
+            market_value_jpy=mv, day_change_jpy=t[0], month_change_jpy=t[1],
+            unrealized_pnl_jpy=t[2], day_change_pct=t[3], month_change_pct=t[4],
+            unrealized_pnl_pct=t[5], realized_pnl_jpy=realized, is_cash=is_cash, is_total=is_total,
+        ))
+    return out
 
 
 def _snapshot_date(soup: BeautifulSoup, year_hint: int | None) -> date | None:

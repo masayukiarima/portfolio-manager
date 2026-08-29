@@ -21,7 +21,7 @@ def parse_path(path: Path, override: date | None = None) -> tuple[bytes, ParseRe
     result = parse_html(decode_html(raw), year_hint=mtime.year)
     snap = override or result.snapshot_date or mtime.date()
     result.snapshot_date = snap
-    for r in result.records:
+    for r in result.all_records:
         r.snapshot_date = snap
         r.source_file = path.name
     return raw, result
@@ -72,8 +72,13 @@ def cmd_import(args: argparse.Namespace) -> int:
                 n = dbmod.upsert_orders(conn, result.orders)
             elif result.kind == "funds":
                 n = dbmod.upsert_funds(conn, result.funds)
+            elif result.kind == "balances":
+                n = dbmod.upsert_balances(conn, result.balances)
             else:
                 n = dbmod.upsert_holdings(conn, result.holdings)
+                if result.balances:  # 楽天の保有一覧は残高サマリも同時に持つ
+                    nb = dbmod.upsert_balances(conn, result.balances)
+                    label += f" (+残高 {nb}件)"
             new_raw = dbmod.record_raw_import(
                 conn, snapshot_date=snap.isoformat(), broker=result.broker,
                 source_file=path.name, content=raw, row_count=n, kind=result.kind,
@@ -150,6 +155,39 @@ def print_funds(rows) -> None:
               f"{_g(r, 'name')}")
 
 
+def cmd_balances(args: argparse.Namespace) -> int:
+    conn = dbmod.connect(Path(args.db))
+    where, params = ("WHERE snapshot_date = ?", (args.date,)) if args.date else ("", ())
+    source = "balances" if args.date else "latest_balances"
+    rows = conn.execute(
+        f"SELECT * FROM {source} {where} ORDER BY broker, is_total, is_cash, category", params
+    ).fetchall()
+    print_balances(rows)
+    cash = conn.execute(
+        f"SELECT broker, snapshot_date, ROUND(SUM(market_value_jpy)) cash FROM {source} {where} "
+        + ("AND" if where else "WHERE") + " is_cash = 1 AND is_total = 0 GROUP BY broker, snapshot_date",
+        params,
+    ).fetchall()
+    print()
+    print(f"{'broker':8} {'date':10} {'現金同等物(円)':>14}")
+    for r in cash:
+        print(f"{r['broker']:8} {r['snapshot_date']:10} {r['cash'] or 0:>14,.0f}")
+    return 0
+
+
+def print_balances(rows) -> None:
+    def num(v, fmt=",.0f"):
+        return f"{v:{fmt}}" if v is not None else "-"
+
+    print(f"{'broker':8} {'区分':12} {'C':1} {'評価額(円)':>14} {'損益(円)':>12} {'損益%':>7} "
+          f"{'前日比(円)':>11} {'前月比(円)':>11} 画面表記")
+    for r in rows:
+        print(f"{_g(r, 'broker'):8} {_g(r, 'category'):12} {'*' if _g(r, 'is_cash') else ' '} "
+              f"{num(_g(r, 'market_value_jpy')):>14} {num(_g(r, 'unrealized_pnl_jpy')):>12} "
+              f"{num(_g(r, 'unrealized_pnl_pct'), ',.2f'):>7} {num(_g(r, 'day_change_jpy')):>11} "
+              f"{num(_g(r, 'month_change_jpy')):>11} {_g(r, 'label')}")
+
+
 def cmd_sql(args: argparse.Namespace) -> int:
     """任意の SQL を実行して結果を表形式（または CSV）で表示する。sqlite3 CLI が無い環境向け。"""
     import csv
@@ -194,6 +232,8 @@ def cmd_dates(args: argparse.Namespace) -> int:
         "SELECT snapshot_date, broker, 'orders', COUNT(*) FROM orders GROUP BY 1, 2 "
         "UNION ALL "
         "SELECT snapshot_date, broker, 'funds', COUNT(*) FROM funds GROUP BY 1, 2 "
+        "UNION ALL "
+        "SELECT snapshot_date, broker, 'balances', COUNT(*) FROM balances GROUP BY 1, 2 "
         "ORDER BY 1 DESC, 2, 3"
     ):
         print(f"{r['snapshot_date']}  {r['broker']:8} {r['kind']:8} {r['n']}件")
@@ -209,8 +249,13 @@ def _print_records(result: ParseResult) -> None:
         print_orders(result.orders)
     elif result.kind == "funds":
         print_funds(result.funds)
+    elif result.kind == "balances":
+        print_balances(result.balances)
     else:
         print_holdings(result.holdings)
+        if result.balances:
+            print()
+            print_balances(result.balances)
 
 
 def print_holdings(rows) -> None:
@@ -262,6 +307,10 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("funds", help="最新の保有ファンド（投資信託）を表示", parents=[common])
     s.add_argument("--date", help="表示する日付 (YYYY-MM-DD)")
     s.set_defaults(func=cmd_funds)
+
+    s = sub.add_parser("balances", help="最新の資産残高サマリ（商品区分別・預り金・銀行残高）を表示", parents=[common])
+    s.add_argument("--date", help="表示する日付 (YYYY-MM-DD)")
+    s.set_defaults(func=cmd_balances)
 
     s = sub.add_parser("dates", help="取込済みの日付一覧", parents=[common])
     s.set_defaults(func=cmd_dates)

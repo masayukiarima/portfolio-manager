@@ -114,15 +114,53 @@ class Fund:
 
 
 @dataclass
+class Balance:
+    """資産残高サマリの1行（商品区分ごとの評価額・預り金・銀行残高・合計）。すべて円建て。"""
+
+    snapshot_date: date
+    broker: str
+    category: str                   # 正規化した区分: 国内株式 / 米国株式 / 投資信託 / 預り金(USD) / 銀行口座 / 合計 …
+    label: str                      # 画面表記そのまま
+    market_value_jpy: Optional[float] = None
+    unrealized_pnl_jpy: Optional[float] = None
+    unrealized_pnl_pct: Optional[float] = None
+    day_change_jpy: Optional[float] = None
+    day_change_pct: Optional[float] = None
+    month_change_jpy: Optional[float] = None
+    month_change_pct: Optional[float] = None
+    realized_pnl_jpy: Optional[float] = None
+    is_cash: bool = False           # 預り金・MMF・銀行残高など現金同等物
+    is_total: bool = False          # 合計行
+    source_file: Optional[str] = None
+
+    def to_row(self) -> dict:
+        d = asdict(self)
+        d["snapshot_date"] = self.snapshot_date.isoformat()
+        d["is_cash"] = int(self.is_cash)
+        d["is_total"] = int(self.is_total)
+        return d
+
+
+@dataclass
 class ParseResult:
     broker: str
     snapshot_date: Optional[date]   # ページから読めなかった場合は None
     holdings: list[Holding] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
-    kind: str = "holdings"          # "holdings" | "orders" | "funds"
+    kind: str = "holdings"          # "holdings" | "orders" | "funds" | "balances"
     orders: list[Order] = field(default_factory=list)
     funds: list[Fund] = field(default_factory=list)
+    balances: list[Balance] = field(default_factory=list)   # kind に関わらず付随して取れた残高
 
     @property
     def records(self) -> list:
-        return {"orders": self.orders, "funds": self.funds}.get(self.kind, self.holdings)
+        return {"orders": self.orders, "funds": self.funds, "balances": self.balances}.get(
+            self.kind, self.holdings)
+
+    @property
+    def all_records(self) -> list:
+        """source_file / snapshot_date を付与すべき全レコード（主レコード + 付随する残高）。"""
+        recs = list(self.records)
+        if self.kind != "balances":
+            recs += self.balances
+        return recs

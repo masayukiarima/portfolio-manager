@@ -28,6 +28,7 @@ uv run pytest         # 動作確認
 | 保有一覧（株式） | `imports/` | 口座管理 → 外国株式 → 保有銘柄 | 口座管理 → 保有商品一覧 → すべて |
 | 注文照会 | `imports/orders/` | 取引 → 外国株式 → 注文照会 | 米国株式取引 → 注文照会・訂正・取消 |
 | 保有ファンド（投資信託） | `imports/funds/` | 投資信託 → 保有ファンド | （未対応） |
+| 資産残高サマリ（現金含む） | `imports/assets/` | My資産 → 資産残高（「詳細を表示する」を開いてから保存） | 保有商品一覧の上部から自動取得（別ページ不要） |
 
 SBI の保有ファンド画面には日付が表示されないため、保存ファイルの更新日時が `snapshot_date` になる。別の日に取り込む場合は `--date` で指定する。
 
@@ -48,7 +49,8 @@ uv run portfolio import x.html --date 2026-08-29   # 日付を明示して取込
 uv run portfolio show                    # 証券会社ごとの最新の保有状況 + 集計
 uv run portfolio orders                  # 証券会社ごとの最新の注文状況
 uv run portfolio funds                   # 証券会社ごとの最新の保有ファンド + 集計
-uv run portfolio show --date 2026-08-29  # 指定日（orders / funds も同様）
+uv run portfolio balances                # 商品区分別の評価額・預り金・銀行残高 + 現金同等物の合計
+uv run portfolio show --date 2026-08-29  # 指定日（orders / funds / balances も同様）
 uv run portfolio dates                   # 取込済みの日付一覧
 ```
 
@@ -149,10 +151,26 @@ sqlite3 -header -column portfolio.db "SELECT * FROM latest_orders"   # ワンラ
 | `day_change_jpy` / `day_change_pct` | 前日比 |
 | `is_accumulating` | 積立設定中なら 1 |
 
+### `balances` テーブル — 資産残高サマリ（現金・銀行残高を含む）
+
+1行 = スナップショット日 × 証券会社 × 区分。SBI は My資産ページから、楽天は保有商品一覧の上部テーブルから取る。
+
+| 列 | 内容 |
+|---|---|
+| `category` | 正規化した区分: `国内株式` / `米国株式` / `投資信託` / `外貨建MMF` / `預り金(JPY)` / `預り金(USD)` / `預り金(外貨)` / `預り金合計` / `銀行口座` / `合計` / `保有商品合計` … |
+| `label` | 画面表記そのまま（`スィープ専用銀行口座`、`楽天銀行普通預金残高` など） |
+| `market_value_jpy`, `unrealized_pnl_jpy`, `unrealized_pnl_pct` | 評価額・評価損益・損益率 |
+| `day_change_jpy` / `day_change_pct`, `month_change_jpy` / `month_change_pct` | 前日比・前月比 |
+| `realized_pnl_jpy` | 実現損益（楽天のみ） |
+| `is_cash` | 現金同等物（預り金・MMF・MRF・銀行残高・保証金）なら 1 |
+| `is_total` | 合計行なら 1（集計時は除外する） |
+
+保有ゼロの区分は取り込まない。楽天の保有一覧を取り込むと `holdings` と同時に `balances` にも入る。
+
 ### その他
 
-- `raw_imports` … 取り込んだ HTML 原本（sha256 で重複排除、`kind` = holdings/orders/funds）。パーサ修正後に再処理するための保険
-- `latest_holdings` / `latest_orders` / `latest_funds` ビュー … 証券会社ごとの最新日付の行だけを返す
+- `raw_imports` … 取り込んだ HTML 原本（sha256 で重複排除、`kind` = holdings/orders/funds/balances）。パーサ修正後に再処理するための保険
+- `latest_holdings` / `latest_orders` / `latest_funds` / `latest_balances` ビュー … 証券会社ごとの最新日付の行だけを返す
 
 ### クエリ例
 
@@ -166,6 +184,12 @@ FROM latest_holdings WHERE asset_class = '米国株式' GROUP BY symbol ORDER BY
 
 -- 評価額の推移
 SELECT snapshot_date, broker, SUM(market_value_jpy) FROM holdings GROUP BY 1, 2 ORDER BY 1;
+
+-- 現金同等物（預り金・MMF・銀行残高）の合計
+SELECT broker, SUM(market_value_jpy) FROM latest_balances WHERE is_cash = 1 AND is_total = 0 GROUP BY broker;
+
+-- 証券会社が計算した総資産（合計行）の推移
+SELECT snapshot_date, broker, market_value_jpy FROM balances WHERE category = '合計' ORDER BY 1, 2;
 
 -- 株式 + 投資信託を合わせた総資産（証券会社 × NISA 区分）
 SELECT broker, is_nisa, SUM(mv) AS market_value_jpy FROM (
@@ -195,15 +219,16 @@ WHERE o.side = '売' AND o.trigger_price IS NOT NULL ORDER BY pct;
 
 ```
 src/portfolio/
-  models.py                  Holding / Order / Fund … 証券会社横断の共通レコード
+  models.py                  Holding / Order / Fund / Balance … 証券会社横断の共通レコード
   parsers/__init__.py        文字コード判定・ページ種別判定（broker × holdings/orders）
   parsers/sbi.py             SBI 外国株式 保有銘柄（div 構造）
   parsers/sbi_orders.py      SBI 外国株式 注文照会
   parsers/sbi_funds.py       SBI 投資信託 保有ファンド
-  parsers/rakuten.py         楽天 保有商品一覧（EUC-JP、table 構造）
+  parsers/sbi_assets.py      SBI My資産 資産残高（商品区分別・預り金・スイープ口座）
+  parsers/rakuten.py         楽天 保有商品一覧（EUC-JP、table 構造）+ 上部の資産残高テーブル
   parsers/rakuten_orders.py  楽天 米国株式 注文照会
   db.py                      SQLite スキーマ・冪等 UPSERT・原本保存・列追加マイグレーション
-  cli.py                     import / show / orders / funds / dates / sql
+  cli.py                     import / show / orders / funds / balances / dates / sql
 tests/                       個人データを含まない合成フィクスチャでのテスト
 ```
 
