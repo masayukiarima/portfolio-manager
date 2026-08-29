@@ -88,6 +88,18 @@ def test_import_is_idempotent(tmp_path):
     assert [tuple(r) for r in latest] == [("sbi", 5)]
 
 
+def test_expand_handles_glob_metachars_in_filename(tmp_path):
+    from portfolio.cli import _expand
+
+    # 楽天の保存ファイル名は "[PC]" を含む。bash が展開済みの実パスを glob と誤認しないこと
+    f = tmp_path / "保有商品一覧 _ 楽天証券[PC].html"
+    f.write_text("x", encoding="utf-8")
+    assert _expand(str(f)) == [f]
+    # 存在しないパスは glob パターンとして扱う
+    assert _expand(str(tmp_path / "*.html")) == [f]
+    assert _expand(str(tmp_path / "nothing*.html")) == []
+
+
 def test_unknown_file_raises(tmp_path):
     f = tmp_path / "x.html"
     f.write_text("<html><body>hello</body></html>", encoding="utf-8")

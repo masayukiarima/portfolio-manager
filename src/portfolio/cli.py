@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import glob
 import sys
 from datetime import date, datetime
 from pathlib import Path
@@ -31,12 +32,25 @@ def parse_path(path: Path, override: date | None = None) -> tuple[bytes, ParseRe
     return raw, result
 
 
+def _expand(pattern: str) -> list[Path]:
+    """引数をファイル一覧に展開する。
+
+    bash はシェル側で glob を展開して実ファイル名を渡し、PowerShell/cmd は展開せずパターンを
+    そのまま渡す。ファイル名に '[PC]' のような glob メタ文字が含まれることがあるため、
+    まず実在するパスとして扱い、存在しない場合だけ glob パターンとみなす。
+    """
+    p = Path(pattern)
+    if p.exists():
+        return [p]
+    return sorted(Path(m) for m in glob.glob(pattern))
+
+
 def cmd_import(args: argparse.Namespace) -> int:
     override = date.fromisoformat(args.date) if args.date else None
     conn = dbmod.connect(Path(args.db))
     status = 0
     for pattern in args.files:
-        paths = sorted(Path().glob(pattern)) if any(ch in pattern for ch in "*?[") else [Path(pattern)]
+        paths = _expand(pattern)
         if not paths:
             print(f"[skip] 該当なし: {pattern}", file=sys.stderr)
         for path in paths:
