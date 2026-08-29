@@ -70,8 +70,14 @@ def test_analyze_and_render(tmp_path, capsys):
     assert gldm["cls"] == "金" and gldm["mv"] == 1674709
     assert any(c["label"] == "別口座現金" for c in a.cash_items)
 
+    assert len(a.holdings_rows) == 5 + 3 + 2 - 2  # SBI米国株5(うち現金/MMF2は除外) + 楽天3 + SBI国内株2
+    assert a.holdings_rows[0]["mv"] >= a.holdings_rows[-1]["mv"]
+    assert any(r["symbol"] == "7203" and r["cls"] == "国内株式" for r in a.holdings_rows)
+    assert len(a.funds_rows) == 4 and len(a.manual_rows) == 2
+
     html = render(a)
     assert "<svg" in html and "資産配分" in html and "資産推移" in html
+    assert 'id="tab-holdings"' in html and "保有一覧" in html and "GLDM" in html and "7203" in html
     assert "別口座現金" in html and "暗号資産" in html
     assert 'href="http' not in html and "<script src" not in html  # 自己完結
 

@@ -53,7 +53,70 @@ th{{color:var(--ink2);font-weight:500;font-size:12px}} td:first-child,th:first-c
 svg text{{fill:var(--ink2);font-size:11px}} svg .lab{{fill:var(--ink);font-size:12px;font-weight:600}}
 .tip{{position:fixed;pointer-events:none;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:8px 10px;font-size:12px;box-shadow:0 4px 14px rgba(0,0,0,.12);display:none;z-index:9;white-space:nowrap}}
 .note{{color:var(--ink3);font-size:12px}} ul.note{{padding-left:18px}}
+.tabs{{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:16px 0 20px}}
+.tabs button{{background:none;border:0;border-bottom:2px solid transparent;padding:8px 14px;font:inherit;color:var(--ink2);cursor:pointer}}
+.tabs button[aria-selected=true]{{color:var(--ink);border-bottom-color:var(--ink);font-weight:600}}
+[hidden]{{display:none!important}}
+td.pos{{color:#0a7a2f}} td.neg{{color:#c0392b}} @media (prefers-color-scheme: dark){{td.pos{{color:#4cc46f}} td.neg{{color:#ff7b6b}}}}
+tr.sum td{{font-weight:600;border-top:2px solid var(--line)}}
 """
+
+
+def _signed(v, fmt=",.0f") -> str:
+    if v is None:
+        return "<td>-</td>"
+    cls = "pos" if v > 0 else "neg" if v < 0 else ""
+    return f'<td class="{cls}">{v:+{fmt}}</td>'
+
+
+def _num(v, fmt=",.2f") -> str:
+    return f"<td>{v:{fmt}}</td>" if v is not None else "<td>-</td>"
+
+
+def _holdings_tab(a: Analysis) -> str:
+    def stock_table(rows: list[dict]) -> str:
+        body = "".join(
+            f'<tr><td class="l">{_esc(r["broker"])}</td><td class="l">{_esc(r["account"])}{" ★" if r["nisa"] else ""}</td>'
+            f'<td class="l"><i class="sw" style="background:var(--s{_CLASS_SLOT.get(r["cls"], 6)})"></i>{_esc(r["cls"])}</td>'
+            f'<td class="l"><b>{_esc(r["symbol"])}</b></td><td class="l">{_esc(r["name"])}</td>'
+            f'{_num(r["qty"], ",.0f" if (r["qty"] or 0) == int(r["qty"] or 0) else ",.2f")}'
+            f'<td class="l">{_esc(r["currency"])}</td>{_num(r["price"])}{_num(r["avg_cost"])}'
+            f'{_num(r["cost_jpy"], ",.0f")}<td>{_yen(r["mv"])}</td>{_signed(r["pnl"])}{_signed(r["pct"], ".1f")}'
+            f'<td>{_pct(r["share"])}</td><td>{"○" if r["stop"] else ""}</td><td class="l">{r["date"]}</td></tr>'
+            for r in rows)
+        mv = sum(r["mv"] for r in rows)
+        cost = sum(r["cost_jpy"] or 0 for r in rows)
+        pnl = sum(r["pnl"] or 0 for r in rows)
+        total = (f'<tr class="sum"><td class="l" colspan="9">合計 {len(rows)} 銘柄</td><td>{_yen(cost)}</td><td>{_yen(mv)}</td>'
+                 f'{_signed(pnl)}{_signed(pnl / cost * 100 if cost else None, ".1f")}<td>{_pct(mv / (a.total or 1) * 100)}</td><td></td><td></td></tr>')
+        return ("<table><tr><th>証券</th><th>口座</th><th>区分</th><th>銘柄</th><th>名称</th><th>数量</th><th>通貨</th>"
+                "<th>現在値</th><th>取得単価</th><th>取得額(円)</th><th>評価額(円)</th><th>損益(円)</th><th>損益%</th>"
+                f"<th>全体比</th><th>逆指値</th><th>日付</th></tr>{body}{total}</table>")
+
+    def fund_table(rows: list[dict]) -> str:
+        body = "".join(
+            f'<tr><td class="l">{_esc(r["broker"])}</td><td class="l">{_esc(r["account"])}{" ★" if r["nisa"] else ""}</td>'
+            f'<td class="l">{_esc(r["name"])}</td>{_num(r["units"], ",.0f")}{_num(r["nav"], ",.0f")}{_num(r["avg_cost"], ",.0f")}'
+            f'{_num(r["cost_jpy"], ",.0f")}<td>{_yen(r["mv"])}</td>{_signed(r["pnl"])}{_signed(r["pct"], ".1f")}'
+            f'<td>{_pct(r["share"])}</td><td class="l">{r["date"]}</td></tr>' for r in rows)
+        mv = sum(r["mv"] for r in rows)
+        cost = sum(r["cost_jpy"] or 0 for r in rows)
+        pnl = sum(r["pnl"] or 0 for r in rows)
+        total = (f'<tr class="sum"><td class="l" colspan="6">合計 {len(rows)} 本</td><td>{_yen(cost)}</td><td>{_yen(mv)}</td>'
+                 f'{_signed(pnl)}{_signed(pnl / cost * 100 if cost else None, ".1f")}<td>{_pct(mv / (a.total or 1) * 100)}</td><td></td></tr>')
+        return ("<table><tr><th>証券</th><th>口座</th><th>ファンド名</th><th>口数</th><th>基準価額</th><th>取得単価</th>"
+                f"<th>取得額(円)</th><th>評価額(円)</th><th>損益(円)</th><th>損益%</th><th>全体比</th><th>日付</th></tr>{body}{total}</table>")
+
+    cash = "".join(f'<tr><td class="l">{_esc(c["who"])}</td><td class="l">{_esc(c["label"])}</td><td>{_yen(c["mv"])}</td>'
+                   f'<td>{_pct(c["mv"] / (a.total or 1) * 100)}</td></tr>' for c in a.cash_items)
+    manual = "".join(f'<tr><td class="l">{_esc(r["name"])}</td><td class="l">{_esc(r["cls"])}</td><td class="l">{_esc(r["currency"])}</td>'
+                     f'<td>{_yen(r["mv"])}</td><td>{_pct(r["share"])}</td><td class="l">{r["date"]}</td><td class="l">{_esc(r["note"] or "")}</td></tr>'
+                     for r in a.manual_rows)
+    return (f'<h2 style="margin-top:0">株式・ETF（{len(a.holdings_rows)} 件、評価額順）</h2><div class="card">{stock_table(a.holdings_rows)}</div>'
+            f'<h2>投資信託（{len(a.funds_rows)} 件）</h2><div class="card">{fund_table(a.funds_rows)}</div>'
+            f'<h2>現金同等物</h2><div class="card"><table><tr><th>口座</th><th>項目</th><th>評価額(円)</th><th>全体比</th></tr>{cash}</table></div>'
+            f'<h2>手入力資産</h2><div class="card"><table><tr><th>名前</th><th>資産クラス</th><th>通貨</th><th>金額(円)</th><th>全体比</th><th>日付</th><th>メモ</th></tr>{manual}</table></div>'
+            '<p class="note">★ = NISA 口座。逆指値 ○ = 売り逆指値注文あり。損益は円換算、投信の基準価額・取得単価は 1万口あたり。</p>')
 
 
 def _donut(a: Analysis) -> str:
@@ -172,6 +235,9 @@ def render(a: Analysis) -> str:
     return f"""<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Portfolio Report {a.as_of}</title><style>{_css()}</style></head><body><main>
 <h1>ポートフォリオ分析</h1><p class="sub">{a.as_of} 時点のスナップショット（生成: {datetime.now():%Y-%m-%d %H:%M}）。手入力資産・暗号資産は最新の登録値を引き継ぎ。</p>
+<div class="tabs" role="tablist"><button role="tab" aria-selected="true" data-tab="analysis">分析</button><button role="tab" aria-selected="false" data-tab="holdings">保有一覧</button></div>
+<section id="tab-holdings" hidden>{_holdings_tab(a)}</section>
+<section id="tab-analysis">
 <div class="tiles">{tiles_html}</div>
 <div class="row" style="margin-top:20px">
   <div class="card"><h3>資産配分</h3><div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start">{_donut(a)}</div>
@@ -183,8 +249,15 @@ def render(a: Analysis) -> str:
 <h2>資産推移</h2><div class="card">{_history(a)}<p class="note">各日付時点で、証券会社・テーブルごとの最新スナップショットを合算（取込していない日は前回値を引き継ぐ）。</p></div>
 <h2>上位ポジション（証券会社・口座横断）</h2><div class="card"><table><tr><th>銘柄</th><th>名称</th><th>評価額(円)</th><th>全体比</th></tr>{top_rows}</table></div>
 <ul class="note"><li>本レポートは保有状況の事実整理であり、投資助言ではありません。</li><li>資産クラスの上書きは <code>portfolio classify</code>、手入力資産は <code>portfolio manual</code> で管理。</li></ul>
+</section>
 </main><div class="tip" id="tip"></div>
 <script>
+document.querySelectorAll('.tabs button').forEach(b=>b.addEventListener('click',()=>{{
+  document.querySelectorAll('.tabs button').forEach(x=>x.setAttribute('aria-selected',x===b));
+  document.querySelectorAll('main > section').forEach(s=>s.hidden=(s.id!=='tab-'+b.dataset.tab));
+  history.replaceState(null,'','#'+b.dataset.tab);
+}}));
+if(location.hash==='#holdings')document.querySelector('[data-tab=holdings]').click();
 const tip=document.getElementById('tip'),xh=document.getElementById('xh');
 document.querySelectorAll('[data-tip]').forEach(el=>{{
   el.addEventListener('mousemove',e=>{{tip.style.display='block';tip.textContent='';el.dataset.tip.split('\\\\n').forEach((l,i)=>{{if(i)tip.appendChild(document.createElement('br'));tip.appendChild(document.createTextNode(l));}});

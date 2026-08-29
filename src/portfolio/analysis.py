@@ -43,6 +43,9 @@ class Analysis:
     cash_items: list[dict]                       # broker/name, label, mv
     stop_covered_value: float                    # 逆指値が入っている保有の評価額
     equity_value: float                          # 米国株 + 国内株の評価額（逆指値カバー率の分母）
+    holdings_rows: list[dict] = field(default_factory=list)   # 全保有銘柄（一覧タブ用）
+    funds_rows: list[dict] = field(default_factory=list)
+    manual_rows: list[dict] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
 
@@ -153,8 +156,30 @@ def analyze(conn: sqlite3.Connection) -> Analysis:
     equity_value = sum(r["market_value_jpy"] or 0 for r in equity)
     covered = sum(r["market_value_jpy"] or 0 for r in equity if (r["broker"], r["symbol"]) in stops)
 
+    holdings_rows = sorted((
+        {"broker": r["broker"], "account": r["account_type"], "nisa": bool(r["is_nisa"]), "cls": _holding_class(r, overrides),
+         "asset_class": r["asset_class"], "symbol": r["symbol"], "name": r["name"], "qty": r["quantity"],
+         "currency": r["currency"], "price": r["price"], "avg_cost": r["avg_cost"],
+         # 楽天は円建て取得額が画面に無いので 評価額 − 損益 で補う
+         "cost_jpy": r["acquisition_amount_jpy"] if r["acquisition_amount_jpy"] is not None
+         else ((r["market_value_jpy"] or 0) - r["unrealized_pnl_jpy"] if r["unrealized_pnl_jpy"] is not None else None),
+         "mv": r["market_value_jpy"] or 0, "pnl": r["unrealized_pnl_jpy"],
+         "pct": r["unrealized_pnl_pct"], "date": r["snapshot_date"],
+         "stop": (r["broker"], r["symbol"]) in stops, "share": (r["market_value_jpy"] or 0) / total * 100 if total else 0}
+        for r in sec), key=lambda d: -d["mv"])
+    funds_rows = sorted((
+        {"broker": f["broker"], "account": f["account_type"], "nisa": bool(f["is_nisa"]), "name": f["name"],
+         "units": f["units"], "nav": f["nav"], "avg_cost": f["avg_cost"], "cost_jpy": f["acquisition_amount_jpy"],
+         "mv": f["market_value_jpy"] or 0, "pnl": f["unrealized_pnl_jpy"], "pct": f["unrealized_pnl_pct"],
+         "date": f["snapshot_date"], "share": (f["market_value_jpy"] or 0) / total * 100 if total else 0}
+        for f in funds), key=lambda d: -d["mv"])
+    manual_rows = [{"name": r["name"], "cls": r["asset_class"], "currency": r["currency"], "mv": r["amount_jpy"],
+                    "date": r["snapshot_date"], "note": r["note"], "share": r["amount_jpy"] / total * 100 if total else 0}
+                   for r in manual]
+
     return Analysis(
         as_of=as_of, allocation=allocation, history=history, total=total, unrealized_pnl=unrealized,
         nisa_value=nisa, taxable_pnl=taxable, currency=currency, top_positions=top, cash_items=cash_items,
         stop_covered_value=covered, equity_value=equity_value,
+        holdings_rows=holdings_rows, funds_rows=funds_rows, manual_rows=manual_rows,
     )
