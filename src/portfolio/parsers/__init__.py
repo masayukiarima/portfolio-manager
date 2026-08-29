@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 
 from portfolio.models import ParseResult
-from portfolio.parsers import rakuten, rakuten_orders, sbi, sbi_orders
+from portfolio.parsers import rakuten, rakuten_orders, sbi, sbi_funds, sbi_orders
 
 _CHARSET_RE = re.compile(rb'charset=["\']?([\w-]+)', re.I)
 
@@ -25,7 +25,9 @@ def decode_html(raw: bytes) -> str:
 
 
 def detect(html: str) -> tuple[str, str] | None:
-    """(broker, kind) を返す。kind は "holdings" | "orders"。判定できなければ None。"""
+    """(broker, kind) を返す。kind は "holdings" | "orders" | "funds"。判定できなければ None。"""
+    if sbi_funds.matches(html):
+        return "sbi", "funds"
     if sbi_orders.matches(html):
         return "sbi", "orders"
     if rakuten_orders.matches(html):
@@ -51,6 +53,8 @@ def parse_html(html: str, year_hint: int | None = None) -> ParseResult:
         return sbi.parse(html)
     if (broker, kind) == ("sbi", "orders"):
         return sbi_orders.parse(html)
+    if (broker, kind) == ("sbi", "funds"):
+        return sbi_funds.parse(html)
     if (broker, kind) == ("rakuten", "holdings"):
         return rakuten.parse(html, year_hint=year_hint)
     return rakuten_orders.parse(html, year_hint=year_hint)

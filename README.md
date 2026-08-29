@@ -25,8 +25,11 @@ uv run pytest         # 動作確認
 
 | 画面 | 保存先 | SBI証券 | 楽天証券 |
 |---|---|---|---|
-| 保有一覧 | `imports/` | 口座管理 → 外国株式 → 保有銘柄 | 口座管理 → 保有商品一覧 → すべて |
+| 保有一覧（株式） | `imports/` | 口座管理 → 外国株式 → 保有銘柄 | 口座管理 → 保有商品一覧 → すべて |
 | 注文照会 | `imports/orders/` | 取引 → 外国株式 → 注文照会 | 米国株式取引 → 注文照会・訂正・取消 |
+| 保有ファンド（投資信託） | `imports/funds/` | 投資信託 → 保有ファンド | （未対応） |
+
+SBI の保有ファンド画面には日付が表示されないため、保存ファイルの更新日時が `snapshot_date` になる。別の日に取り込む場合は `--date` で指定する。
 
 ### 2. 取り込む
 
@@ -44,7 +47,8 @@ uv run portfolio import x.html --date 2026-08-29   # 日付を明示して取込
 ```bash
 uv run portfolio show                    # 証券会社ごとの最新の保有状況 + 集計
 uv run portfolio orders                  # 証券会社ごとの最新の注文状況
-uv run portfolio show --date 2026-08-29  # 指定日（orders も同様）
+uv run portfolio funds                   # 証券会社ごとの最新の保有ファンド + 集計
+uv run portfolio show --date 2026-08-29  # 指定日（orders / funds も同様）
 uv run portfolio dates                   # 取込済みの日付一覧
 ```
 
@@ -130,10 +134,25 @@ sqlite3 -header -column portfolio.db "SELECT * FROM latest_orders"   # ワンラ
 | `settlement` | `外貨決済` / `円貨決済` |
 | `condition` | 逆指値条件・IFD などの補足テキスト（複数行は ` / ` で連結） |
 
+### `funds` テーブル — 保有ファンド（投資信託）
+
+1行 = スナップショット日 × 証券会社 × 口座区分 × ファンド名。すべて円建て。
+
+| 列 | 内容 |
+|---|---|
+| `snapshot_date`, `broker`, `is_nisa` | `holdings` と同じ |
+| `account_type` | `特定` / `NISAつみたて` / `NISA成長` / `旧つみたてNISA` … |
+| `name` | ファンド名（画面表記そのまま、全角） |
+| `units` / `selling_units` | 保有口数 / 売却注文中の口数 |
+| `nav` / `avg_cost` | 基準価額 / 取得単価（いずれも 1万口あたり・円） |
+| `market_value_jpy`, `acquisition_amount_jpy`, `unrealized_pnl_jpy`, `unrealized_pnl_pct` | 評価額・取得金額・評価損益・損益率 |
+| `day_change_jpy` / `day_change_pct` | 前日比 |
+| `is_accumulating` | 積立設定中なら 1 |
+
 ### その他
 
-- `raw_imports` … 取り込んだ HTML 原本（sha256 で重複排除、`kind` = holdings/orders）。パーサ修正後に再処理するための保険
-- `latest_holdings` / `latest_orders` ビュー … 証券会社ごとの最新日付の行だけを返す
+- `raw_imports` … 取り込んだ HTML 原本（sha256 で重複排除、`kind` = holdings/orders/funds）。パーサ修正後に再処理するための保険
+- `latest_holdings` / `latest_orders` / `latest_funds` ビュー … 証券会社ごとの最新日付の行だけを返す
 
 ### クエリ例
 
@@ -147,6 +166,13 @@ FROM latest_holdings WHERE asset_class = '米国株式' GROUP BY symbol ORDER BY
 
 -- 評価額の推移
 SELECT snapshot_date, broker, SUM(market_value_jpy) FROM holdings GROUP BY 1, 2 ORDER BY 1;
+
+-- 株式 + 投資信託を合わせた総資産（証券会社 × NISA 区分）
+SELECT broker, is_nisa, SUM(mv) AS market_value_jpy FROM (
+  SELECT broker, is_nisa, market_value_jpy AS mv FROM latest_holdings
+  UNION ALL
+  SELECT broker, is_nisa, market_value_jpy FROM latest_funds
+) GROUP BY 1, 2;
 
 -- 逆指値（損切り）が現在値からどれだけ下にあるか
 SELECT o.broker, o.symbol, h.price, o.trigger_price,
@@ -172,10 +198,11 @@ src/portfolio/
   parsers/__init__.py        文字コード判定・ページ種別判定（broker × holdings/orders）
   parsers/sbi.py             SBI 外国株式 保有銘柄（div 構造）
   parsers/sbi_orders.py      SBI 外国株式 注文照会
+  parsers/sbi_funds.py       SBI 投資信託 保有ファンド
   parsers/rakuten.py         楽天 保有商品一覧（EUC-JP、table 構造）
   parsers/rakuten_orders.py  楽天 米国株式 注文照会
   db.py                      SQLite スキーマ・冪等 UPSERT・原本保存・列追加マイグレーション
-  cli.py                     import / show / orders / dates / sql
+  cli.py                     import / show / orders / funds / dates / sql
 tests/                       個人データを含まない合成フィクスチャでのテスト
 ```
 

@@ -70,6 +70,8 @@ def cmd_import(args: argparse.Namespace) -> int:
                 continue
             if result.kind == "orders":
                 n = dbmod.upsert_orders(conn, result.orders)
+            elif result.kind == "funds":
+                n = dbmod.upsert_funds(conn, result.funds)
             else:
                 n = dbmod.upsert_holdings(conn, result.holdings)
             new_raw = dbmod.record_raw_import(
@@ -114,6 +116,40 @@ def cmd_orders(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_funds(args: argparse.Namespace) -> int:
+    conn = dbmod.connect(Path(args.db))
+    where, params = ("WHERE snapshot_date = ?", (args.date,)) if args.date else ("", ())
+    source = "funds" if args.date else "latest_funds"
+    rows = conn.execute(
+        f"SELECT * FROM {source} {where} ORDER BY broker, account_type, name", params
+    ).fetchall()
+    print_funds(rows)
+    summary = conn.execute(
+        "SELECT broker, snapshot_date, is_nisa, COUNT(*) n, "
+        "ROUND(SUM(market_value_jpy)) mv, ROUND(SUM(unrealized_pnl_jpy)) pnl "
+        f"FROM {source} {where} GROUP BY broker, snapshot_date, is_nisa ORDER BY broker, is_nisa",
+        params,
+    ).fetchall()
+    print()
+    print(f"{'broker':8} {'date':10} {'nisa':4} {'件数':>4} {'評価額(円)':>14} {'損益(円)':>12}")
+    for r in summary:
+        print(f"{r['broker']:8} {r['snapshot_date']:10} {r['is_nisa']:>4} {r['n']:>4} "
+              f"{r['mv'] or 0:>14,.0f} {r['pnl'] or 0:>12,.0f}")
+    return 0
+
+
+def print_funds(rows) -> None:
+    print(f"{'broker':8} {'口座':12} {'N':1} {'積':1} {'口数':>12} {'基準価額':>9} {'取得単価':>9} "
+          f"{'評価額(円)':>12} {'損益(円)':>12} {'損益%':>7} {'前日比(円)':>10} ファンド名")
+    for r in rows:
+        print(f"{_g(r, 'broker'):8} {_g(r, 'account_type'):12} {'*' if _g(r, 'is_nisa') else ' '} "
+              f"{'*' if _g(r, 'is_accumulating') else ' '} {_g(r, 'units') or 0:>12,.0f} "
+              f"{_g(r, 'nav') or 0:>9,.0f} {_g(r, 'avg_cost') or 0:>9,.0f} "
+              f"{_g(r, 'market_value_jpy') or 0:>12,.0f} {_g(r, 'unrealized_pnl_jpy') or 0:>12,.0f} "
+              f"{_g(r, 'unrealized_pnl_pct') or 0:>7,.2f} {_g(r, 'day_change_jpy') or 0:>10,.0f} "
+              f"{_g(r, 'name')}")
+
+
 def cmd_sql(args: argparse.Namespace) -> int:
     """任意の SQL を実行して結果を表形式（または CSV）で表示する。sqlite3 CLI が無い環境向け。"""
     import csv
@@ -156,6 +192,8 @@ def cmd_dates(args: argparse.Namespace) -> int:
         "SELECT snapshot_date, broker, 'holdings' kind, COUNT(*) n FROM holdings GROUP BY 1, 2 "
         "UNION ALL "
         "SELECT snapshot_date, broker, 'orders', COUNT(*) FROM orders GROUP BY 1, 2 "
+        "UNION ALL "
+        "SELECT snapshot_date, broker, 'funds', COUNT(*) FROM funds GROUP BY 1, 2 "
         "ORDER BY 1 DESC, 2, 3"
     ):
         print(f"{r['snapshot_date']}  {r['broker']:8} {r['kind']:8} {r['n']}件")
@@ -169,6 +207,8 @@ def _g(r, k):
 def _print_records(result: ParseResult) -> None:
     if result.kind == "orders":
         print_orders(result.orders)
+    elif result.kind == "funds":
+        print_funds(result.funds)
     else:
         print_holdings(result.holdings)
 
@@ -218,6 +258,10 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("orders", help="最新の注文状況を表示", parents=[common])
     s.add_argument("--date", help="表示する日付 (YYYY-MM-DD)")
     s.set_defaults(func=cmd_orders)
+
+    s = sub.add_parser("funds", help="最新の保有ファンド（投資信託）を表示", parents=[common])
+    s.add_argument("--date", help="表示する日付 (YYYY-MM-DD)")
+    s.set_defaults(func=cmd_funds)
 
     s = sub.add_parser("dates", help="取込済みの日付一覧", parents=[common])
     s.set_defaults(func=cmd_dates)

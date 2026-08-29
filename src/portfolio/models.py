@@ -84,14 +84,45 @@ class Order:
 
 
 @dataclass
+class Fund:
+    """保有ファンド（投資信託）画面の1行。すべて円建て。"""
+
+    snapshot_date: date
+    broker: str
+    account_type: str               # 特定 / NISAつみたて / NISA成長 / 旧つみたてNISA …
+    is_nisa: bool
+    name: str
+    units: Optional[float] = None               # 保有口数
+    selling_units: Optional[float] = None       # 売却注文中の口数
+    nav: Optional[float] = None                 # 基準価額（1万口あたり・円）
+    avg_cost: Optional[float] = None            # 取得単価（1万口あたり・円）
+    market_value_jpy: Optional[float] = None
+    acquisition_amount_jpy: Optional[float] = None
+    unrealized_pnl_jpy: Optional[float] = None
+    unrealized_pnl_pct: Optional[float] = None
+    day_change_jpy: Optional[float] = None
+    day_change_pct: Optional[float] = None
+    is_accumulating: bool = False               # 積立設定中
+    source_file: Optional[str] = None
+
+    def to_row(self) -> dict:
+        d = asdict(self)
+        d["snapshot_date"] = self.snapshot_date.isoformat()
+        d["is_nisa"] = int(self.is_nisa)
+        d["is_accumulating"] = int(self.is_accumulating)
+        return d
+
+
+@dataclass
 class ParseResult:
     broker: str
     snapshot_date: Optional[date]   # ページから読めなかった場合は None
     holdings: list[Holding] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
-    kind: str = "holdings"          # "holdings" | "orders"
+    kind: str = "holdings"          # "holdings" | "orders" | "funds"
     orders: list[Order] = field(default_factory=list)
+    funds: list[Fund] = field(default_factory=list)
 
     @property
     def records(self) -> list:
-        return self.orders if self.kind == "orders" else self.holdings
+        return {"orders": self.orders, "funds": self.funds}.get(self.kind, self.holdings)
