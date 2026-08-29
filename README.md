@@ -58,7 +58,47 @@ uv run portfolio dates                   # 取込済みの日付一覧
 
 全コマンド共通で `--db path/to/file.db` を付けると DB ファイルを変更できる（既定: `./portfolio.db`）。
 
-### 4. SQL で直接確認する
+### 4. 画面から取れない資産を手入力する
+
+別口座の現金や暗号資産など。日付付きのスナップショットなので、値が変わったら同じ名前で追加すれば履歴になる。
+
+```bash
+uv run portfolio manual add "別口座現金" 1800000                                  # 既定: 現金同等物 / JPY / 今日
+uv run portfolio manual add "BTC/ETH" 2700000 --class 暗号資産 --currency BTC
+uv run portfolio manual add "別口座現金" 1500000 --date 2026-09-15                # 更新（履歴として残る）
+uv run portfolio manual list
+uv run portfolio manual delete "BTC/ETH" --date 2026-08-30
+```
+
+資産クラスは `米国株式 / 投資信託 / 金 / 国内株式 / 暗号資産 / 現金同等物 / その他`。
+
+### 5. 銘柄の資産クラスを上書きする
+
+分析では保有銘柄を上の資産クラスに振り分ける。既定で金 ETF（GLDM, GLD, IAU, 1540, 1326）は「金」。それ以外を変えたいとき:
+
+```bash
+uv run portfolio classify              # 既定と上書きの一覧
+uv run portfolio classify PBR その他    # 上書き
+uv run portfolio classify PBR --reset  # 上書きを削除
+```
+
+### 6. 分析レポート（HTML）
+
+```bash
+uv run portfolio report                 # report.html を生成（git 管理外）
+uv run portfolio report --open          # 生成してブラウザで開く
+uv run portfolio report -o docs/2026-08-30.html
+```
+
+外部依存なしの単一 HTML。内容:
+- 総資産・含み益・NISA 残高・特定口座含み益（税額目安）・米国株比率・現金比率・逆指値カバー率
+- **資産配分**（ドーナツ）と **通貨エクスポージャ**、現金同等物の内訳
+- **資産推移**（積み上げ面グラフ + 合計線、ホバーで日付ごとの内訳、表切替）
+- 上位ポジション（証券会社・口座横断）
+
+推移は「各日付時点で、証券会社×テーブルごとの最新スナップショットを合算」する。取込していない日は前回値を引き継ぐので、ページによって保存日がずれても総資産が欠けない。
+
+### 7. SQL で直接確認する
 
 #### `portfolio sql`（sqlite3 CLI 不要）
 
@@ -230,8 +270,10 @@ src/portfolio/
   parsers/sbi_assets.py      SBI My資産 資産残高（商品区分別・預り金・スイープ口座）
   parsers/rakuten.py         楽天 保有商品一覧（EUC-JP、table 構造）+ 上部の資産残高テーブル
   parsers/rakuten_orders.py  楽天 米国株式 注文照会
-  db.py                      SQLite スキーマ・冪等 UPSERT・原本保存・列追加マイグレーション
-  cli.py                     import / show / orders / funds / balances / dates / sql
+  db.py                      SQLite スキーマ・冪等 UPSERT・原本保存・列追加マイグレーション・手入力資産・銘柄分類
+  analysis.py                資産クラス別の配分・推移・指標（NISA、税、通貨、逆指値カバー率）の計算
+  report.py                  分析結果を自己完結 HTML（インライン SVG）に描画
+  cli.py                     import / show / orders / funds / balances / dates / manual / classify / report / sql
 tests/                       個人データを含まない合成フィクスチャでのテスト
 ```
 

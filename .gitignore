@@ -229,3 +229,4 @@ tmp/
 
 # pytest basetemp (pyproject.toml addopts)
 .pytest_tmp/
+report.html

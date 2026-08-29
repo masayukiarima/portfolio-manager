@@ -184,6 +184,64 @@ def print_balances(rows) -> None:
               f"{num(_g(r, 'month_change_jpy')):>11} {_g(r, 'label')}")
 
 
+def cmd_manual(args: argparse.Namespace) -> int:
+    conn = dbmod.connect(Path(args.db))
+    if args.action == "add":
+        snap = args.date or date.today().isoformat()
+        dbmod.upsert_manual_asset(conn, snapshot_date=snap, name=args.name, asset_class=args.asset_class,
+                                  amount_jpy=args.amount, currency=args.currency, note=args.note)
+        print(f"[ok] {snap} {args.name} ({args.asset_class}, {args.currency}) {args.amount:,.0f}円")
+    elif args.action == "delete":
+        n = dbmod.delete_manual_asset(conn, snapshot_date=args.date, name=args.name)
+        print(f"[ok] {n}件 削除" if n else "[skip] 該当なし")
+    else:
+        rows = conn.execute("SELECT * FROM manual_assets ORDER BY snapshot_date DESC, name").fetchall()
+        print(f"{'date':10} {'名前':20} {'資産クラス':8} {'通貨':4} {'金額(円)':>14} メモ")
+        for r in rows:
+            print(f"{r['snapshot_date']:10} {r['name']:20} {r['asset_class']:8} {r['currency']:4} "
+                  f"{r['amount_jpy']:>14,.0f} {r['note'] or ''}")
+    return 0
+
+
+def cmd_classify(args: argparse.Namespace) -> int:
+    from portfolio.analysis import ASSET_CLASSES, DEFAULT_SYMBOL_CLASSES
+
+    conn = dbmod.connect(Path(args.db))
+    if args.symbol and args.asset_class:
+        if args.asset_class not in ASSET_CLASSES:
+            print(f"資産クラスは {' / '.join(ASSET_CLASSES)} のいずれか", file=sys.stderr)
+            return 2
+        dbmod.set_symbol_class(conn, args.symbol, args.asset_class, args.note)
+        print(f"[ok] {args.symbol} → {args.asset_class}")
+    elif args.symbol and args.reset:
+        dbmod.set_symbol_class(conn, args.symbol, None)
+        print(f"[ok] {args.symbol} の上書きを削除")
+    else:
+        over = dbmod.symbol_classes(conn)
+        print("既定:", ", ".join(f"{k}→{v}" for k, v in DEFAULT_SYMBOL_CLASSES.items()))
+        print("上書き:", ", ".join(f"{k}→{v}" for k, v in over.items()) or "(なし)")
+        print("資産クラス:", " / ".join(ASSET_CLASSES))
+    return 0
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    import webbrowser
+
+    from portfolio.analysis import analyze
+    from portfolio.report import render
+
+    conn = dbmod.connect(Path(args.db))
+    a = analyze(conn)
+    out = Path(args.output)
+    out.write_text(render(a), encoding="utf-8")
+    print(f"[ok] {out} を生成 ({a.as_of} 時点, 総資産 {a.total:,.0f}円, {len(a.history)} 日分の推移)")
+    for w in a.warnings:
+        print(f"[warn] {w}", file=sys.stderr)
+    if args.open:
+        webbrowser.open(out.resolve().as_uri())
+    return 0
+
+
 def cmd_sql(args: argparse.Namespace) -> int:
     """任意の SQL を実行して結果を表形式（または CSV）で表示する。sqlite3 CLI が無い環境向け。"""
     import csv
@@ -308,6 +366,34 @@ def main(argv: list[str] | None = None) -> int:
 
     s = sub.add_parser("dates", help="取込済みの日付一覧", parents=[common])
     s.set_defaults(func=cmd_dates)
+
+    s = sub.add_parser("manual", help="画面から取れない資産（別口座の現金・暗号資産など）を手入力", parents=[common])
+    ms = s.add_subparsers(dest="action", required=True)
+    m = ms.add_parser("add", help="追加・更新（同じ日付・名前は上書き）", parents=[common])
+    m.add_argument("name", help="項目名（例: 別口座現金, BTC）")
+    m.add_argument("amount", type=float, help="円換算額")
+    m.add_argument("--class", dest="asset_class", default="現金同等物",
+                   help="資産クラス: 米国株式 / 投資信託 / 金 / 国内株式 / 暗号資産 / 現金同等物 / その他（既定: 現金同等物）")
+    m.add_argument("--currency", default="JPY", help="建て通貨（JPY / USD / BTC …。既定: JPY）")
+    m.add_argument("--date", help="日付 (YYYY-MM-DD、既定: 今日)")
+    m.add_argument("--note")
+    m = ms.add_parser("list", help="一覧", parents=[common])
+    m = ms.add_parser("delete", help="削除", parents=[common])
+    m.add_argument("name")
+    m.add_argument("--date", required=True)
+    s.set_defaults(func=cmd_manual)
+
+    s = sub.add_parser("classify", help="銘柄の資産クラスを上書き（例: GLDM 金）", parents=[common])
+    s.add_argument("symbol", nargs="?")
+    s.add_argument("asset_class", nargs="?")
+    s.add_argument("--reset", action="store_true", help="上書きを削除")
+    s.add_argument("--note")
+    s.set_defaults(func=cmd_classify)
+
+    s = sub.add_parser("report", help="分析レポート（HTML）を生成", parents=[common])
+    s.add_argument("-o", "--output", default="report.html", help="出力先（既定: report.html）")
+    s.add_argument("--open", action="store_true", help="生成後にブラウザで開く")
+    s.set_defaults(func=cmd_report)
 
     s = sub.add_parser("sql", help="任意の SQL を実行して表示（sqlite3 CLI 不要）", parents=[common])
     s.add_argument("query", nargs="?", help="SQL 文")

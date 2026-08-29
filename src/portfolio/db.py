@@ -120,6 +120,26 @@ CREATE TABLE IF NOT EXISTS balances (
 );
 CREATE INDEX IF NOT EXISTS idx_balances_date ON balances (snapshot_date);
 
+-- 画面から取れない資産（別口座の現金、暗号資産など）を手入力で持つ。日付ごとのスナップショット。
+CREATE TABLE IF NOT EXISTS manual_assets (
+    id            INTEGER PRIMARY KEY,
+    snapshot_date TEXT NOT NULL,
+    name          TEXT NOT NULL,
+    asset_class   TEXT NOT NULL,
+    amount_jpy    REAL NOT NULL,
+    currency      TEXT NOT NULL DEFAULT 'JPY',
+    note          TEXT,
+    updated_at    TEXT NOT NULL,
+    UNIQUE (snapshot_date, name)
+);
+
+-- 銘柄の資産クラス上書き（例: GLDM → 金）。分析・レポートで使う。
+CREATE TABLE IF NOT EXISTS symbol_classes (
+    symbol      TEXT PRIMARY KEY,
+    asset_class TEXT NOT NULL,
+    note        TEXT
+);
+
 CREATE TABLE IF NOT EXISTS raw_imports (
     id            INTEGER PRIMARY KEY,
     snapshot_date TEXT NOT NULL,
@@ -237,6 +257,44 @@ def upsert_balances(conn: sqlite3.Connection, balances: list[Balance]) -> int:
     """同一 (snapshot_date, broker, category) は上書き。"""
     return _upsert(conn, "balances", _BALANCE_COLS, "snapshot_date, broker, category",
                    [b.to_row() for b in balances])
+
+
+def upsert_manual_asset(conn: sqlite3.Connection, *, snapshot_date: str, name: str,
+                        asset_class: str, amount_jpy: float, currency: str = "JPY",
+                        note: str | None = None) -> None:
+    with conn:
+        conn.execute(
+            "INSERT INTO manual_assets (snapshot_date, name, asset_class, amount_jpy, currency, note, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(snapshot_date, name) DO UPDATE SET asset_class=excluded.asset_class, "
+            "amount_jpy=excluded.amount_jpy, currency=excluded.currency, note=excluded.note, "
+            "updated_at=excluded.updated_at",
+            (snapshot_date, name, asset_class, amount_jpy, currency, note,
+             datetime.now().isoformat(timespec="seconds")),
+        )
+
+
+def delete_manual_asset(conn: sqlite3.Connection, *, snapshot_date: str, name: str) -> int:
+    with conn:
+        cur = conn.execute("DELETE FROM manual_assets WHERE snapshot_date = ? AND name = ?", (snapshot_date, name))
+    return cur.rowcount
+
+
+def set_symbol_class(conn: sqlite3.Connection, symbol: str, asset_class: str | None, note: str | None = None) -> None:
+    """asset_class が None なら上書きを削除する。"""
+    with conn:
+        if asset_class is None:
+            conn.execute("DELETE FROM symbol_classes WHERE symbol = ?", (symbol,))
+        else:
+            conn.execute(
+                "INSERT INTO symbol_classes (symbol, asset_class, note) VALUES (?, ?, ?) "
+                "ON CONFLICT(symbol) DO UPDATE SET asset_class=excluded.asset_class, note=excluded.note",
+                (symbol, asset_class, note),
+            )
+
+
+def symbol_classes(conn: sqlite3.Connection) -> dict[str, str]:
+    return {r["symbol"]: r["asset_class"] for r in conn.execute("SELECT symbol, asset_class FROM symbol_classes")}
 
 
 def record_raw_import(conn: sqlite3.Connection, *, snapshot_date: str, broker: str,
