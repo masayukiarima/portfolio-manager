@@ -92,6 +92,26 @@ def test_orders_import_is_idempotent(tmp_path):
     assert conn.execute("SELECT COUNT(*) FROM latest_orders").fetchone()[0] == 3
 
 
+def test_sql_command(tmp_path, capsys):
+    from portfolio.cli import main
+
+    db = str(tmp_path / "t.db")
+    _, res = parse_path(FIX / "rakuten_orders.html")
+    conn = dbmod.connect(Path(db))
+    dbmod.upsert_orders(conn, res.orders)
+    conn.close()
+
+    assert main(["sql", "--db", db, "SELECT order_no, symbol FROM orders ORDER BY order_no"]) == 0
+    out = capsys.readouterr().out
+    assert "order_no" in out and "0314" in out and "(3 rows)" in out
+
+    assert main(["sql", "--db", db, "--csv", "SELECT order_no FROM orders ORDER BY order_no"]) == 0
+    assert capsys.readouterr().out.splitlines() == ["order_no", "0314", "0326", "0328"]
+
+    assert main(["sql", "--db", db, "SELEC x"]) == 1
+    assert "SQL error" in capsys.readouterr().err
+
+
 def test_raw_imports_kind_migration(tmp_path):
     import sqlite3
 

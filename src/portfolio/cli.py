@@ -114,6 +114,42 @@ def cmd_orders(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_sql(args: argparse.Namespace) -> int:
+    """任意の SQL を実行して結果を表形式（または CSV）で表示する。sqlite3 CLI が無い環境向け。"""
+    import csv
+    import sqlite3
+
+    conn = dbmod.connect(Path(args.db))
+    query = Path(args.file).read_text(encoding="utf-8") if args.file else args.query
+    if not query:
+        print("SQL を引数か --file で指定してください", file=sys.stderr)
+        return 2
+    try:
+        cur = conn.execute(query)
+    except sqlite3.Error as e:
+        print(f"SQL error: {e}", file=sys.stderr)
+        return 1
+    if cur.description is None:  # INSERT/UPDATE 等
+        conn.commit()
+        print(f"{cur.rowcount} rows affected")
+        return 0
+    cols = [d[0] for d in cur.description]
+    rows = cur.fetchall()
+    if args.csv:
+        w = csv.writer(sys.stdout, lineterminator="\n")
+        w.writerow(cols)
+        w.writerows(tuple(r) for r in rows)
+        return 0
+    cells = [[("" if v is None else f"{v:,.2f}" if isinstance(v, float) else str(v)) for v in r] for r in rows]
+    widths = [max(len(c), *(len(row[i]) for row in cells)) if cells else len(c) for i, c in enumerate(cols)]
+    print("  ".join(c.ljust(w) for c, w in zip(cols, widths)))
+    print("  ".join("-" * w for w in widths))
+    for row in cells:
+        print("  ".join(v.ljust(w) for v, w in zip(row, widths)))
+    print(f"({len(rows)} rows)")
+    return 0
+
+
 def cmd_dates(args: argparse.Namespace) -> int:
     conn = dbmod.connect(Path(args.db))
     for r in conn.execute(
@@ -185,6 +221,12 @@ def main(argv: list[str] | None = None) -> int:
 
     s = sub.add_parser("dates", help="取込済みの日付一覧", parents=[common])
     s.set_defaults(func=cmd_dates)
+
+    s = sub.add_parser("sql", help="任意の SQL を実行して表示（sqlite3 CLI 不要）", parents=[common])
+    s.add_argument("query", nargs="?", help="SQL 文")
+    s.add_argument("-f", "--file", help="SQL ファイル")
+    s.add_argument("--csv", action="store_true", help="CSV で出力")
+    s.set_defaults(func=cmd_sql)
 
     args = p.parse_args(argv)
     return args.func(args)

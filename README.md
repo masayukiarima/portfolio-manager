@@ -50,6 +50,44 @@ uv run portfolio dates                   # 取込済みの日付一覧
 
 全コマンド共通で `--db path/to/file.db` を付けると DB ファイルを変更できる（既定: `./portfolio.db`）。
 
+### 4. SQL で直接確認する
+
+#### `portfolio sql`（sqlite3 CLI 不要）
+
+Python 内蔵の SQLite で任意の SQL を実行する。
+
+```bash
+uv run portfolio sql "SELECT name FROM sqlite_master WHERE type IN ('table','view')"   # テーブル・ビュー一覧
+uv run portfolio sql "PRAGMA table_info(orders)"                                        # 列定義
+uv run portfolio sql "SELECT * FROM latest_orders WHERE broker = 'sbi'"
+uv run portfolio sql --csv "SELECT * FROM latest_holdings" > holdings.csv               # CSV 出力
+uv run portfolio sql -f query.sql                                                       # ファイルから実行
+```
+
+#### sqlite3 CLI を使う場合
+
+対話的に触りたければ公式 CLI を入れる（Git Bash からは `winpty` を付けると対話モードが安定する）。
+
+```bash
+winget install SQLite.SQLite          # インストール（PowerShell/コマンドプロンプトで一度だけ）
+winpty sqlite3 portfolio.db           # 対話モード
+sqlite3 -header -column portfolio.db "SELECT * FROM latest_orders"   # ワンライナー
+```
+
+対話モードでよく使うメタコマンド:
+
+```
+.tables                  テーブル・ビュー一覧
+.schema orders           テーブル定義
+.headers on / .mode column   見やすい表形式
+.mode csv / .output x.csv    CSV に書き出し（.output stdout で戻す）
+.quit
+```
+
+#### GUI
+
+[DB Browser for SQLite](https://sqlitebrowser.org/)（`winget install DBBrowserForSQLite.DBBrowserForSQLite`）で `portfolio.db` を開くと、テーブル閲覧・SQL 実行・CSV エクスポートが GUI でできる。取込中に GUI 側で書き込みロックを掴んでいると `import` が失敗するので、閲覧専用で開くこと。
+
 ## データ
 
 `portfolio.db`（SQLite、git 管理外）
@@ -137,7 +175,7 @@ src/portfolio/
   parsers/rakuten.py         楽天 保有商品一覧（EUC-JP、table 構造）
   parsers/rakuten_orders.py  楽天 米国株式 注文照会
   db.py                      SQLite スキーマ・冪等 UPSERT・原本保存・列追加マイグレーション
-  cli.py                     import / show / orders / dates
+  cli.py                     import / show / orders / dates / sql
 tests/                       個人データを含まない合成フィクスチャでのテスト
 ```
 
