@@ -226,3 +226,6 @@ tmp/
 imports/
 tmp/
 *.db
+
+# pytest basetemp (pyproject.toml addopts)
+.pytest_tmp/

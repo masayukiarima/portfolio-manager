@@ -24,3 +24,5 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+# %TEMP%\pytest-of-<user> の ACL が壊れると tmp_path が使えなくなるため、プロジェクト内に固定する
+addopts = "--basetemp=.pytest_tmp"
