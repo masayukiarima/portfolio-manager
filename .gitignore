@@ -221,3 +221,8 @@ __marimo__/
 logs/
 *.log
 tmp/
+
+# portfolio-manager
+imports/
+tmp/
+*.db
