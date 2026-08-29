@@ -81,7 +81,7 @@ def test_import_and_balances_command(tmp_path, capsys):
         (tmp_path / "imports" / name).write_bytes((FIX / name).read_bytes())
     assert main(["import", "--db", str(db), str(tmp_path / "imports" / "*.html")]) == 0
     out = capsys.readouterr().out
-    assert "sbi balances" in out and "rakuten holdings" in out and "+残高" in out
+    assert "balances 5件" in out and "holdings 3件, balances 6件" in out
 
     conn = dbmod.connect(db)
     assert conn.execute("SELECT COUNT(*) FROM balances WHERE broker = 'sbi'").fetchone()[0] == 5

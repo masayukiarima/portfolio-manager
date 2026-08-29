@@ -159,8 +159,5 @@ class ParseResult:
 
     @property
     def all_records(self) -> list:
-        """source_file / snapshot_date を付与すべき全レコード（主レコード + 付随する残高）。"""
-        recs = list(self.records)
-        if self.kind != "balances":
-            recs += self.balances
-        return recs
+        """このページから取れた全レコード（1ページに複数種別が載ることがある）。"""
+        return [*self.holdings, *self.orders, *self.funds, *self.balances]

@@ -63,25 +63,21 @@ def cmd_import(args: argparse.Namespace) -> int:
             for w in result.warnings:
                 print(f"[warn] {path.name}: {w}", file=sys.stderr)
             snap = result.snapshot_date
-            label = f"{result.broker} {result.kind} {snap} {len(result.records)}件"
+            # 1ページに複数種別が載ることがある（楽天: holdings+balances、SBI保有証券一覧: holdings+funds）
+            parts = [(k, v) for k, v in (("holdings", result.holdings), ("orders", result.orders),
+                                         ("funds", result.funds), ("balances", result.balances)) if v]
+            label = f"{result.broker} {snap} " + ", ".join(f"{k} {len(v)}件" for k, v in parts)
             if args.dry_run:
                 _print_records(result)
                 print(f"[dry-run] {path.name}: {label}")
                 continue
-            if result.kind == "orders":
-                n = dbmod.upsert_orders(conn, result.orders)
-            elif result.kind == "funds":
-                n = dbmod.upsert_funds(conn, result.funds)
-            elif result.kind == "balances":
-                n = dbmod.upsert_balances(conn, result.balances)
-            else:
-                n = dbmod.upsert_holdings(conn, result.holdings)
-                if result.balances:  # 楽天の保有一覧は残高サマリも同時に持つ
-                    nb = dbmod.upsert_balances(conn, result.balances)
-                    label += f" (+残高 {nb}件)"
+            n = 0
+            for k, v in parts:
+                n += {"holdings": dbmod.upsert_holdings, "orders": dbmod.upsert_orders,
+                      "funds": dbmod.upsert_funds, "balances": dbmod.upsert_balances}[k](conn, v)
             new_raw = dbmod.record_raw_import(
                 conn, snapshot_date=snap.isoformat(), broker=result.broker,
-                source_file=path.name, content=raw, row_count=n, kind=result.kind,
+                source_file=path.name, content=raw, row_count=n, kind="+".join(k for k, _ in parts),
             )
             note = "" if new_raw else " (同一内容の再取込)"
             print(f"[ok] {path.name}: {label} 取込{note}")
@@ -245,17 +241,15 @@ def _g(r, k):
 
 
 def _print_records(result: ParseResult) -> None:
-    if result.kind == "orders":
-        print_orders(result.orders)
-    elif result.kind == "funds":
-        print_funds(result.funds)
-    elif result.kind == "balances":
-        print_balances(result.balances)
-    else:
-        print_holdings(result.holdings)
-        if result.balances:
+    first = True
+    for rows, printer in ((result.holdings, print_holdings), (result.orders, print_orders),
+                          (result.funds, print_funds), (result.balances, print_balances)):
+        if not rows:
+            continue
+        if not first:
             print()
-            print_balances(result.balances)
+        printer(rows)
+        first = False
 
 
 def print_holdings(rows) -> None:
