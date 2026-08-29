@@ -108,21 +108,23 @@ def print_holdings(rows) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--db", default=str(dbmod.DEFAULT_DB), help="SQLiteファイル (既定: portfolio.db)")
+
     p = argparse.ArgumentParser(prog="portfolio", description="保有商品一覧HTMLをSQLiteに取り込む")
-    p.add_argument("--db", default=str(dbmod.DEFAULT_DB), help="SQLiteファイル (既定: portfolio.db)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    s = sub.add_parser("import", help="保存したHTMLを取り込む")
+    s = sub.add_parser("import", help="保存したHTMLを取り込む", parents=[common])
     s.add_argument("files", nargs="+", help="HTMLファイル (glob可)")
     s.add_argument("--date", help="スナップショット日付を上書き (YYYY-MM-DD)")
     s.add_argument("--dry-run", action="store_true", help="DBに書かず解析結果だけ表示")
     s.set_defaults(func=cmd_import)
 
-    s = sub.add_parser("show", help="最新スナップショットを表示")
+    s = sub.add_parser("show", help="最新スナップショットを表示", parents=[common])
     s.add_argument("--date", help="表示する日付 (YYYY-MM-DD)")
     s.set_defaults(func=cmd_show)
 
-    s = sub.add_parser("dates", help="取込済みの日付一覧")
+    s = sub.add_parser("dates", help="取込済みの日付一覧", parents=[common])
     s.set_defaults(func=cmd_dates)
 
     args = p.parse_args(argv)
