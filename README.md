@@ -186,15 +186,16 @@ WHERE o.side = '売' AND o.trigger_price IS NOT NULL ORDER BY pct;
 
 - 楽天証券の画面は年を表示しないため、保存ファイルの更新日時から年を補完する。古いファイルを後から取り込む場合は `--date` を指定する
 - 楽天証券の「時価評価額合計」は画面側が行ごとに円未満を丸めているため、行の合計と数円ずれることがある
-- 対応済みは **米国株式（外国株式）ページのみ**。SBI の国内株式・投資信託ページ、楽天の国内株式注文照会は別構造なので未対応
+- 対応済みは **米国株式（外国株式）ページと SBI の投資信託ページ**。SBI の国内株式ページ、楽天の投資信託ページ・国内株式注文照会は別構造なので未対応
 - 楽天証券の保有一覧の国内株式・投資信託行は実サンプル未確認（列構成が同じ前提で実装）
+- 同じ日付の取込は上書きされる（行は増えない）。ただし同日中に売却して銘柄が減った場合、前回取込の行は残るので、その日の行を `portfolio sql "DELETE FROM holdings WHERE snapshot_date = '...' AND broker = '...'"` で消してから再取込する
 - 対象外のページを渡すと「証券会社・画面種別を判定できません」で読み飛ばす。「ウェブページ、完全」が作る `*_files/` フォルダ内の HTML は自動的に無視する
 
 ## 開発
 
 ```
 src/portfolio/
-  models.py                  Holding / Order … 証券会社横断の共通レコード
+  models.py                  Holding / Order / Fund … 証券会社横断の共通レコード
   parsers/__init__.py        文字コード判定・ページ種別判定（broker × holdings/orders）
   parsers/sbi.py             SBI 外国株式 保有銘柄（div 構造）
   parsers/sbi_orders.py      SBI 外国株式 注文照会
