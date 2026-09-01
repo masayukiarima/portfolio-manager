@@ -242,6 +242,36 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def _page_notes() -> list[tuple[str, object]]:
+    """fetch の画面一覧（--help 用）。playwright 無しでも import できる。"""
+    from portfolio.fetch import PAGES
+    return list(PAGES.items())
+
+
+def cmd_fetch(args: argparse.Namespace) -> int:
+    try:
+        import playwright  # noqa: F401
+    except ImportError:
+        print("playwright が入っていません: uv sync --extra fetch && uv run playwright install chromium", file=sys.stderr)
+        return 2
+    from portfolio import fetch as fetchmod
+
+    if args.login_check:
+        fetchmod.login_check(args.profile)
+        return 0
+    unknown = [k for k in args.pages if k not in fetchmod.PAGES]
+    if unknown:
+        print(f"[error] 不明な画面: {', '.join(unknown)}（選択肢: {', '.join(fetchmod.PAGES)}）", file=sys.stderr)
+        return 2
+    saved, failed = fetchmod.fetch(args.pages or None, profile=args.profile, out_dir=args.out)
+    status = 1 if failed else 0
+    if failed:
+        print(f"[warn] 取得できなかった画面: {', '.join(failed)}", file=sys.stderr)
+    if args.no_import or not saved:
+        return status
+    return cmd_import(argparse.Namespace(db=args.db, files=[str(s) for s in saved], date=None, dry_run=False)) or status
+
+
 def cmd_sql(args: argparse.Namespace) -> int:
     """任意の SQL を実行して結果を表形式（または CSV）で表示する。sqlite3 CLI が無い環境向け。"""
     import csv
@@ -394,6 +424,16 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("-o", "--output", default="report.html", help="出力先（既定: report.html）")
     s.add_argument("--open", action="store_true", help="生成後にブラウザで開く")
     s.set_defaults(func=cmd_report)
+
+    s = sub.add_parser("fetch", help="ブラウザで証券会社の画面を開いて HTML を保存し、そのまま取り込む（要 playwright）", parents=[common])
+    s.add_argument("pages", nargs="*", metavar="PAGE",
+                   help="取得する画面。省略時はすべて。" + " / ".join(f"{k}: {v.note}" for k, v in _page_notes()))
+    s.add_argument("--login-check", action="store_true", help="ログイン・デバイス認証だけ済ませて終了")
+    s.add_argument("--profile", type=Path, default=None,
+                   help="ブラウザプロファイルの保存先 (既定: tmp/pw-sbi、環境変数 PORTFOLIO_PW_PROFILE でも指定可)")
+    s.add_argument("--out", type=Path, default=None, help="保存先ディレクトリ (既定: imports/)")
+    s.add_argument("--no-import", action="store_true", help="保存だけ行い DB への取込はしない")
+    s.set_defaults(func=cmd_fetch)
 
     s = sub.add_parser("sql", help="任意の SQL を実行して表示（sqlite3 CLI 不要）", parents=[common])
     s.add_argument("query", nargs="?", help="SQL 文")
