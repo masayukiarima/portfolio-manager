@@ -250,6 +250,10 @@ sqlite3 -header -column portfolio.db "SELECT * FROM latest_orders"   # ワンラ
 
 保有ゼロの区分は取り込まない。楽天の保有一覧を取り込むと `holdings` と同時に `balances` にも入る。
 
+分析では、銘柄明細（`holdings` / `funds`）のある証券会社は明細を使い、**明細を持たない証券会社だけ
+`balances` の区分行から資産クラス別の金額を組み立てる**。銘柄単位の記録が無い過去の期間を、証券会社
+ごとの残高だけで埋められるようにするため。明細が入った日からは自動的にそちらが優先される。
+
 ### その他
 
 - `cash_flows` … まとまった入出金（`snapshot_date` + `label` で一意、出金は負値）。修正ディーツ利回りの計算に使う

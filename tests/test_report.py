@@ -1,9 +1,11 @@
+from datetime import date
 from pathlib import Path
 
 from portfolio import db as dbmod
 from portfolio.analysis import (ASSET_CLASSES, Snapshot, allocation_at, analyze,
                                 attach_flows, modified_dietz, snapshot_at)
 from portfolio.cli import main
+from portfolio.models import Balance
 from portfolio.report import render
 
 FIX = Path(__file__).parent / "fixtures"
@@ -167,3 +169,28 @@ def test_flow_after_the_last_snapshot_is_dropped():
     rows = [Snapshot("2026-01-01", {}), Snapshot("2026-02-01", {})]
     attach_flows(rows, [{"date": "2026-03-01", "label": "未来", "amount": 500}])
     assert [r.flow for r in rows] == [0.0, 0.0]
+
+
+def test_balances_stand_in_where_there_is_no_holding_detail(tmp_path, capsys):
+    """銘柄明細を持たない過去日は、証券会社ごとの残高サマリで資産クラスを組み立てる。"""
+    db = tmp_path / "t.db"
+    _seed(db, capsys)
+    conn = dbmod.connect(db)
+    dbmod.upsert_balances(conn, [
+        # 評価損益は証券会社単位でしか無いことがあるので、1行にまとまっている想定
+        Balance(snapshot_date=date(2026, 8, 1), broker="sbi", category="米国株式",
+                label="米国株式", market_value_jpy=10_000_000, unrealized_pnl_jpy=2_000_000),
+        Balance(snapshot_date=date(2026, 8, 1), broker="sbi", category="投資信託",
+                label="投資信託", market_value_jpy=5_000_000),
+        Balance(snapshot_date=date(2026, 8, 1), broker="sbi", category="銀行口座",
+                label="銀行口座", market_value_jpy=500_000, is_cash=True),
+    ])
+
+    s = snapshot_at(conn, "2026-08-01", {})
+    assert s.by_class["米国株式"] == 10_000_000 and s.by_class["投資信託"] == 5_000_000
+    assert s.by_class["現金同等物"] == 500_000 and s.cash_jpy == 500_000
+    # 損益が1行にまとまっていても、取得額は全行ぶん（評価額 − 損益）入る
+    assert s.pnl == 2_000_000 and s.cost == 13_000_000
+    # 明細のある日は残高サマリの非現金行を使わない（8/30 は holdings/funds がある）
+    a30 = allocation_at(conn, "2026-08-30", {})
+    assert a30["米国株式"] == allocation_at(conn, "2026-08-29", {})["米国株式"]

@@ -17,6 +17,9 @@ from datetime import date
 ASSET_CLASSES = ["米国株式", "投資信託", "金", "国内株式", "暗号資産", "現金同等物", "その他"]
 DEFAULT_SYMBOL_CLASSES = {"GLDM": "金", "GLD": "金", "IAU": "金", "IAUM": "金", "1540": "金", "1326": "金"}
 _CASH_HOLDING_CLASSES = {"現金", "外貨建MMF"}
+# 残高サマリのカテゴリ → 資産クラス。銘柄明細が無い日に、資産クラス別の金額を残高から作るために使う
+_BALANCE_CLASSES = {"米国株式": "米国株式", "外国株式": "米国株式", "国内株式": "国内株式",
+                    "投資信託": "投資信託"}
 _USD_CASH_CATEGORIES = {"預り金(USD)", "預り金(外貨)", "外貨建MMF"}
 
 
@@ -142,9 +145,18 @@ def _build_snapshot(date: str, hold, funds, bals, manual, overrides: dict[str, s
     for r in funds:
         alloc["投資信託"] += r["market_value_jpy"] or 0
     brokers_with_balances = {r["broker"] for r in bals}
+    # 銘柄明細（holdings/funds）がある証券会社は明細を使い、無い証券会社だけ残高サマリで代用する。
+    # 年初来のように明細を持たない期間を、証券会社ごとの残高だけで埋められるようにするため。
+    detailed = {r["broker"] for r in hold} | {r["broker"] for r in funds}
+    summary_rows = []
     for r in bals:
-        if r["is_cash"] and not r["is_total"]:
+        if r["is_total"]:
+            continue
+        if r["is_cash"]:
             cash["USD" if r["category"] in _USD_CASH_CATEGORIES else "JPY"] += r["market_value_jpy"] or 0
+        elif r["broker"] not in detailed:
+            alloc[_BALANCE_CLASSES.get(r["category"], "その他")] += r["market_value_jpy"] or 0
+            summary_rows.append(r)
     # balances がまだ無い証券会社は holdings の 現金/MMF 行で代用
     for r in hold:
         if r["broker"] not in brokers_with_balances and r["asset_class"] in _CASH_HOLDING_CLASSES:
@@ -159,15 +171,18 @@ def _build_snapshot(date: str, hold, funds, bals, manual, overrides: dict[str, s
 
     sec = [r for r in hold if r["asset_class"] not in _CASH_HOLDING_CLASSES]
     # 含み益・取得額の対象は 株式・投信・外貨建MMF（預り金は損益を持たない）
-    pnl_rows = sec + [r for r in hold if r["asset_class"] == "外貨建MMF"] + list(funds)
+    detail_rows = sec + [r for r in hold if r["asset_class"] == "外貨建MMF"] + list(funds)
+    # 残高サマリは証券会社ごとの損益を1行にまとめて持つため、損益が無い行も取得額には評価額を足す
+    # （そうしないと分母だけ欠けて利回りが跳ね上がる）
+    summary_cost = sum((r["market_value_jpy"] or 0) - (r["unrealized_pnl_jpy"] or 0) for r in summary_rows)
     # レートは持たずに保有から逆算する。同じ行から出すので円換算額と必ず整合する
     usd = [r for r in hold if r["currency"] == "USD" and r["market_value"] and r["market_value_jpy"]]
     return Snapshot(
         date=date, by_class={k: v for k, v in alloc.items() if v},
         cash_usd=cash["USD"], cash_jpy=cash["JPY"],
         nisa=sum(r["market_value_jpy"] or 0 for r in sec + list(funds) if r["is_nisa"]),
-        cost=sum(c for c in (_cost_jpy(r) for r in pnl_rows) if c is not None),
-        pnl=sum(r["unrealized_pnl_jpy"] or 0 for r in pnl_rows),
+        cost=sum(c for c in (_cost_jpy(r) for r in detail_rows) if c is not None) + summary_cost,
+        pnl=sum(r["unrealized_pnl_jpy"] or 0 for r in detail_rows + summary_rows),
         usd_jpy=(sum(r["market_value_jpy"] for r in usd) / sum(r["market_value"] for r in usd)) if usd else None,
     )
 
