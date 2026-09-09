@@ -30,6 +30,7 @@ class Snapshot:
     nisa: float = 0.0                            # NISA 口座の評価額（株式 + 投信）
     cost: float = 0.0                            # 取得額（株式 + 投信 + MMF、含み益の分母）
     pnl: float = 0.0                             # 含み益（株式 + 投信 + MMF）
+    usd_jpy: float | None = None                 # 実効レート（USD建て保有の 円換算額 ÷ ドル額）
 
     @property
     def total(self) -> float:
@@ -125,12 +126,15 @@ def _build_snapshot(date: str, hold, funds, bals, manual, overrides: dict[str, s
     sec = [r for r in hold if r["asset_class"] not in _CASH_HOLDING_CLASSES]
     # 含み益・取得額の対象は 株式・投信・外貨建MMF（預り金は損益を持たない）
     pnl_rows = sec + [r for r in hold if r["asset_class"] == "外貨建MMF"] + list(funds)
+    # レートは持たずに保有から逆算する。同じ行から出すので円換算額と必ず整合する
+    usd = [r for r in hold if r["currency"] == "USD" and r["market_value"] and r["market_value_jpy"]]
     return Snapshot(
         date=date, by_class={k: v for k, v in alloc.items() if v},
         cash_usd=cash["USD"], cash_jpy=cash["JPY"],
         nisa=sum(r["market_value_jpy"] or 0 for r in sec + list(funds) if r["is_nisa"]),
         cost=sum(c for c in (_cost_jpy(r) for r in pnl_rows) if c is not None),
         pnl=sum(r["unrealized_pnl_jpy"] or 0 for r in pnl_rows),
+        usd_jpy=(sum(r["market_value_jpy"] for r in usd) / sum(r["market_value"] for r in usd)) if usd else None,
     )
 
 

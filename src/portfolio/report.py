@@ -130,7 +130,9 @@ def _timeline_tab(a: Analysis) -> str:
     idx = [i for i, s in enumerate(a.history) if s.date[:4] == year] or list(range(len(a.history)))
     rows = [a.history[i] for i in idx]
     classes = [c for c in ASSET_CLASSES if any(s.by_class.get(c) for s in rows)]
-    head = (f'<tr><th rowspan="2" class="stick">日付</th><th class="grp" colspan="{len(classes)}">資産クラス（円）</th>'
+    head = (f'<tr><th rowspan="2" class="stick">日付</th>'
+            '<th rowspan="2" title="USD建て保有の 円換算額 ÷ ドル額。その日の円換算に実際に使われたレート">実効レート</th>'
+            f'<th class="grp" colspan="{len(classes)}">資産クラス（円）</th>'
             '<th class="grp" colspan="2">うち現金同等物</th><th class="grp" colspan="5">合計・損益</th></tr><tr>'
             + "".join(f'<th><i class="sw" style="background:var(--s{_CLASS_SLOT[c]})"></i>{_esc(c)}</th>' for c in classes)
             + '<th>ドル</th><th>円</th><th>NISA</th><th>合計</th><th>前回比</th><th>含み益</th>'
@@ -139,13 +141,14 @@ def _timeline_tab(a: Analysis) -> str:
     for i, s in zip(idx, rows):
         prev = a.history[i - 1].total if i > 0 else None
         body.append(
-            f'<tr><td class="l stick">{s.date}</td>'
+            f'<tr><td class="l stick">{s.date}</td>{_num(s.usd_jpy)}'
             + "".join(f'<td>{_yen(s.by_class.get(c, 0))}</td>' for c in classes)
             + f'<td>{_yen(s.cash_usd)}</td><td>{_yen(s.cash_jpy)}</td><td>{_yen(s.nisa)}</td>'
             f'<td><b>{_yen(s.total)}</b></td>{_signed(s.total - prev if prev is not None else None)}'
             f'{_signed(s.pnl)}{_signed(s.yield_pct, ".2f")}</tr>')
     first, last = rows[0], rows[-1]
-    diff = (f'<tr class="sum"><td class="l stick">増減</td>'
+    rate_diff = last.usd_jpy - first.usd_jpy if None not in (last.usd_jpy, first.usd_jpy) else None
+    diff = (f'<tr class="sum"><td class="l stick">増減</td>{_signed(rate_diff, ",.2f")}'
             + "".join(_signed(last.by_class.get(c, 0) - first.by_class.get(c, 0)) for c in classes)
             + _signed(last.cash_usd - first.cash_usd) + _signed(last.cash_jpy - first.cash_jpy)
             + _signed(last.nisa - first.nisa) + _signed(last.total - first.total)
@@ -156,7 +159,7 @@ def _timeline_tab(a: Analysis) -> str:
             f'<div class="card"><table class="dense">{head}{"".join(body)}{diff}</table></div>'
             f'<ul class="note"><li>1行 = 取込のあった日。各日付時点で証券会社・テーブルごとの最新スナップショットを合算し、'
             '取込していない項目は前回値を引き継ぐ（値が動いていない日は、その項目を取り込んでいないだけの場合がある）。</li>'
-            '<li>「うち現金同等物」は資産クラスの現金同等物の内訳。ドル = 預り金(USD)・外貨建MMF・USD建の手入力資産。</li>'
+            '<li>実効レートは保有から逆算した値（USD建て保有の 円換算額 ÷ ドル額）で、DB には持たない。前回値を引き継いだ日は、引き継ぎ元の日付のレートになる。</li><li>「うち現金同等物」は資産クラスの現金同等物の内訳。ドル = 預り金(USD)・外貨建MMF・USD建の手入力資産。</li>'
             '<li>含み益・利回りは 株式 + 投資信託 + 外貨建MMF が対象（預り金・暗号資産・手入力資産は取得額を持たないため除外）。'
             '利回り = 含み益 ÷ 取得額 で、年率でも実現損益込みのリターンでもない。</li>'
             f'<li>最下行は {first.date} → {last.date} の増減（利回りのみ pt 差）。</li></ul>')

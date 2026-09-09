@@ -111,6 +111,8 @@ def test_timeline_snapshot_fields(tmp_path, capsys):
     assert s30.cost > 0 and s30.pnl != 0
     assert s30.yield_pct == s30.pnl / s30.cost * 100
     assert s30.nisa > 0
+    # 実効レートは DB に持たず、USD建て保有の 円換算額 ÷ ドル額 で逆算する
+    assert s30.usd_jpy is not None and 100 < s30.usd_jpy < 200
 
     a = analyze(conn)
     last = a.history[-1]
@@ -118,7 +120,7 @@ def test_timeline_snapshot_fields(tmp_path, capsys):
     assert last.pnl == a.unrealized_pnl and last.nisa == a.nisa_value
 
     html = render(a)
-    assert 'id="tab-timeline"' in html and "時系列" in html and "利回り%" in html
+    assert 'id="tab-timeline"' in html and "時系列" in html and "利回り%" in html and "実効レート" in html
     # 今年（as_of の年）の取込日がすべて行になり、最下行に期間増減が入る
     assert html.count('<td class="l stick">') == len(a.history) + 1
     assert '<td class="l stick">2026-08-29</td>' in html and "増減" in html
