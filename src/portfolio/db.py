@@ -133,6 +133,18 @@ CREATE TABLE IF NOT EXISTS manual_assets (
     UNIQUE (snapshot_date, name)
 );
 
+-- まとまった入出金。運用利回りを「相場で増えた分」と「入れた分」に分けるために使う。
+-- 記録するのは資産全体が増減したときだけ。口座間の移動（別口座 → SBI など）は
+-- 合計が動かないので入れない。出金は負値。日々の少額は追わず、大きな増減だけでよい。
+CREATE TABLE IF NOT EXISTS cash_flows (
+    snapshot_date TEXT NOT NULL,
+    label         TEXT NOT NULL,
+    amount_jpy    REAL NOT NULL,
+    note          TEXT,
+    updated_at    TEXT NOT NULL,
+    PRIMARY KEY (snapshot_date, label)
+);
+
 -- 銘柄の資産クラス上書き（例: GLDM → 金）。分析・レポートで使う。
 CREATE TABLE IF NOT EXISTS symbol_classes (
     symbol      TEXT PRIMARY KEY,
@@ -277,6 +289,25 @@ def upsert_manual_asset(conn: sqlite3.Connection, *, snapshot_date: str, name: s
 def delete_manual_asset(conn: sqlite3.Connection, *, snapshot_date: str, name: str) -> int:
     with conn:
         cur = conn.execute("DELETE FROM manual_assets WHERE snapshot_date = ? AND name = ?", (snapshot_date, name))
+    return cur.rowcount
+
+
+def upsert_cash_flow(conn: sqlite3.Connection, *, snapshot_date: str, label: str,
+                     amount_jpy: float, note: str | None = None) -> None:
+    with conn:
+        conn.execute(
+            "INSERT INTO cash_flows (snapshot_date, label, amount_jpy, note, updated_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(snapshot_date, label) DO UPDATE SET amount_jpy=excluded.amount_jpy, "
+            "note=excluded.note, updated_at=excluded.updated_at",
+            (snapshot_date, label, amount_jpy, note, datetime.now().isoformat(timespec="seconds")),
+        )
+
+
+def delete_cash_flow(conn: sqlite3.Connection, *, snapshot_date: str, label: str) -> int:
+    with conn:
+        cur = conn.execute("DELETE FROM cash_flows WHERE snapshot_date = ? AND label = ?",
+                           (snapshot_date, label))
     return cur.rowcount
 
 

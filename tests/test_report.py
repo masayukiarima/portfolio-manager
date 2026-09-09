@@ -1,7 +1,8 @@
 from pathlib import Path
 
 from portfolio import db as dbmod
-from portfolio.analysis import ASSET_CLASSES, allocation_at, analyze, snapshot_at
+from portfolio.analysis import (ASSET_CLASSES, Snapshot, allocation_at, analyze,
+                                attach_flows, modified_dietz, snapshot_at)
 from portfolio.cli import main
 from portfolio.report import render
 
@@ -124,3 +125,45 @@ def test_timeline_snapshot_fields(tmp_path, capsys):
     # 今年（as_of の年）の取込日がすべて行になり、最下行に期間増減が入る
     assert html.count('<td class="l stick">') == len(a.history) + 1
     assert '<td class="l stick">2026-08-29</td>' in html and "増減" in html
+
+
+def test_modified_dietz_weights_flows_by_days_held():
+    # 期初1,000万、期末1,200万、期間200日。150日目に200万入金 → 運用損益は0
+    rows = [Snapshot("2026-01-01", {"現金同等物": 10_000_000}),
+            Snapshot("2026-07-20", {"現金同等物": 12_000_000})]
+    rows[1].flow = 2_000_000
+    gain, flow, dietz = modified_dietz(rows)
+    assert gain == 0 and flow == 2_000_000 and dietz == 0
+    # 入金が無ければ増えた分がそのまま運用損益
+    rows[1].flow = 0
+    gain, flow, dietz = modified_dietz(rows)
+    assert gain == 2_000_000 and flow == 0 and dietz == 20
+    # 1行だけでは期間にならない
+    assert modified_dietz(rows[:1]) == (0.0, 0.0, None)
+
+
+def test_flow_lands_on_the_next_snapshot(tmp_path, capsys):
+    db = tmp_path / "t.db"
+    _seed(db, capsys)
+    # 取込のない日に入れた入金は、次に取込のある日に載る
+    assert main(["flow", "add", "--db", str(db), "ボーナス", "900000", "--date", "2026-08-30"]) == 0
+    assert main(["flow", "add", "--db", str(db), "取込前の入金", "100000", "--date", "2026-08-25"]) == 0
+    capsys.readouterr()
+
+    a = analyze(dbmod.connect(db))
+    by_date = {s.date: s.flow for s in a.history}
+    assert by_date == {"2026-08-29": 100000, "2026-08-30": 900000}
+    assert len(a.flows) == 2
+
+    html = render(a)
+    assert "入出金" in html and "修正ディーツ利回り" in html and "+900,000" in html
+
+    assert main(["flow", "list", "--db", str(db)]) == 0
+    assert "+1,000,000円 / 2件" in capsys.readouterr().out
+    assert main(["flow", "delete", "--db", str(db), "ボーナス", "--date", "2026-08-30"]) == 0
+
+
+def test_flow_after_the_last_snapshot_is_dropped():
+    rows = [Snapshot("2026-01-01", {}), Snapshot("2026-02-01", {})]
+    attach_flows(rows, [{"date": "2026-03-01", "label": "未来", "amount": 500}])
+    assert [r.flow for r in rows] == [0.0, 0.0]

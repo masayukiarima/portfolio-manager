@@ -203,6 +203,26 @@ def cmd_manual(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_flow(args: argparse.Namespace) -> int:
+    conn = dbmod.connect(Path(args.db))
+    if args.action == "add":
+        snap = args.date or date.today().isoformat()
+        dbmod.upsert_cash_flow(conn, snapshot_date=snap, label=args.label,
+                               amount_jpy=args.amount, note=args.note)
+        print(f"[ok] {snap} {args.label} {args.amount:+,.0f}円")
+    elif args.action == "delete":
+        n = dbmod.delete_cash_flow(conn, snapshot_date=args.date, label=args.label)
+        print(f"[ok] {n}件 削除" if n else "[skip] 該当なし")
+    else:
+        rows = conn.execute("SELECT * FROM cash_flows ORDER BY snapshot_date DESC, label").fetchall()
+        print(f"{'date':10} {'項目':20} {'金額(円)':>14} メモ")
+        for r in rows:
+            print(f"{r['snapshot_date']:10} {r['label']:20} {r['amount_jpy']:>+14,.0f} {r['note'] or ''}")
+        print()
+        print(f"合計 {sum(r['amount_jpy'] for r in rows):+,.0f}円 / {len(rows)}件")
+    return 0
+
+
 def cmd_classify(args: argparse.Namespace) -> int:
     from portfolio.analysis import ASSET_CLASSES, DEFAULT_SYMBOL_CLASSES
 
@@ -412,6 +432,20 @@ def main(argv: list[str] | None = None) -> int:
     m.add_argument("name")
     m.add_argument("--date", required=True)
     s.set_defaults(func=cmd_manual)
+
+    s = sub.add_parser("flow", help="まとまった入出金を記録（口座間の移動は資産が動かないので入れない）",
+                       parents=[common])
+    fs = s.add_subparsers(dest="action", required=True)
+    m = fs.add_parser("add", help="追加・更新（同じ日付・項目名は上書き）", parents=[common])
+    m.add_argument("label", help="項目名（例: ボーナス入金）")
+    m.add_argument("amount", type=float, help="円。出金は負値")
+    m.add_argument("--date", help="日付 (YYYY-MM-DD、既定: 今日)")
+    m.add_argument("--note")
+    m = fs.add_parser("list", help="一覧", parents=[common])
+    m = fs.add_parser("delete", help="削除", parents=[common])
+    m.add_argument("label")
+    m.add_argument("--date", required=True)
+    s.set_defaults(func=cmd_flow)
 
     s = sub.add_parser("classify", help="銘柄の資産クラスを上書き（例: GLDM 金）", parents=[common])
     s.add_argument("symbol", nargs="?")

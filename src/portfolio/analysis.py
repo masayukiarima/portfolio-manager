@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass, field
+from datetime import date
 
 ASSET_CLASSES = ["米国株式", "投資信託", "金", "国内株式", "暗号資産", "現金同等物", "その他"]
 DEFAULT_SYMBOL_CLASSES = {"GLDM": "金", "GLD": "金", "IAU": "金", "IAUM": "金", "1540": "金", "1326": "金"}
@@ -31,6 +32,7 @@ class Snapshot:
     cost: float = 0.0                            # 取得額（株式 + 投信 + MMF、含み益の分母）
     pnl: float = 0.0                             # 含み益（株式 + 投信 + MMF）
     usd_jpy: float | None = None                 # 実効レート（USD建て保有の 円換算額 ÷ ドル額）
+    flow: float = 0.0                            # この日に反映された入出金（出金は負）
 
     @property
     def total(self) -> float:
@@ -56,10 +58,42 @@ class Analysis:
     cash_items: list[dict]                       # broker/name, label, mv
     stop_covered_value: float                    # 逆指値が入っている保有の評価額
     equity_value: float                          # 米国株 + 国内株の評価額（逆指値カバー率の分母）
+    flows: list[dict] = field(default_factory=list)           # 入出金（date, label, amount, note）
     holdings_rows: list[dict] = field(default_factory=list)   # 全保有銘柄（一覧タブ用）
     funds_rows: list[dict] = field(default_factory=list)
     manual_rows: list[dict] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+
+
+def attach_flows(history: list[Snapshot], flows: list[dict]) -> None:
+    """入出金を、その日以降で最初にスナップショットがある日に載せる。
+
+    入金した日に必ず取込があるとは限らないので、資産に反映されて見える最初の日に寄せる。
+    最終スナップショットより後の入出金は載せる先が無いので捨てる（次回の取込で載る）。
+    """
+    for s in history:
+        s.flow = 0.0
+    for f in flows:
+        s = next((s for s in history if s.date >= f["date"]), None)
+        if s is not None:
+            s.flow += f["amount"]
+
+
+def modified_dietz(rows: list[Snapshot]) -> tuple[float, float, float | None]:
+    """(運用損益, 入出金合計, 修正ディーツ利回り%) を返す。rows[0] を期初とする。
+
+    期初の残高は rows[0] の時点の値なので、その日に載った入出金はすでに含まれている。
+    期中の入出金は「残っていた日数 ÷ 期間」で加重して分母に足す。
+    """
+    if len(rows) < 2:
+        return 0.0, 0.0, None
+    d0, d1 = date.fromisoformat(rows[0].date), date.fromisoformat(rows[-1].date)
+    days = (d1 - d0).days
+    moves = [(date.fromisoformat(r.date), r.flow) for r in rows[1:] if r.flow]
+    total_flow = sum(a for _, a in moves)
+    gain = rows[-1].total - rows[0].total - total_flow
+    den = rows[0].total + (sum(a * (days - (d - d0).days) / days for d, a in moves) if days else 0)
+    return gain, total_flow, (gain / den * 100 if den else None)
 
 
 def classify_symbol(symbol: str, default_class: str, overrides: dict[str, str]) -> str:
@@ -171,6 +205,9 @@ def analyze(conn: sqlite3.Connection) -> Analysis:
     # 最新日は取得済みの行から組み立て、それ以前の日付は都度引き直す
     current = _build_snapshot(as_of, hold, funds, bals_all, manual, overrides)
     history = [snapshot_at(conn, d, overrides) for d in dates[:-1]] + [current]
+    flows = [{"date": r["snapshot_date"], "label": r["label"], "amount": r["amount_jpy"], "note": r["note"]}
+             for r in conn.execute("SELECT * FROM cash_flows ORDER BY snapshot_date, label")]
+    attach_flows(history, flows)
     allocation = current.by_class
     total = current.total
 
@@ -240,6 +277,6 @@ def analyze(conn: sqlite3.Connection) -> Analysis:
     return Analysis(
         as_of=as_of, allocation=allocation, history=history, total=total, unrealized_pnl=unrealized,
         nisa_value=nisa, taxable_pnl=taxable, currency=currency, top_positions=top, cash_items=cash_items,
-        stop_covered_value=covered, equity_value=equity_value,
+        stop_covered_value=covered, equity_value=equity_value, flows=flows,
         holdings_rows=holdings_rows, funds_rows=funds_rows, manual_rows=manual_rows,
     )

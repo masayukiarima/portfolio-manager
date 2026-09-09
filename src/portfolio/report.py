@@ -5,7 +5,7 @@ import html
 import math
 from datetime import datetime
 
-from portfolio.analysis import ASSET_CLASSES, Analysis
+from portfolio.analysis import ASSET_CLASSES, Analysis, modified_dietz
 
 # カテゴリ色: 固定順スロット（dataviz 既定パレット、CVD 検証済みの順序）。資産クラスの表示順に対応させる。
 _LIGHT = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7"]
@@ -135,7 +135,9 @@ def _timeline_tab(a: Analysis) -> str:
             f'<th class="grp" colspan="{len(classes)}">資産クラス（円）</th>'
             '<th class="grp" colspan="2">うち現金同等物</th><th class="grp" colspan="5">合計・損益</th></tr><tr>'
             + "".join(f'<th><i class="sw" style="background:var(--s{_CLASS_SLOT[c]})"></i>{_esc(c)}</th>' for c in classes)
-            + '<th>ドル</th><th>円</th><th>NISA</th><th>合計</th><th>前回比</th><th>含み益</th>'
+            + '<th>ドル</th><th>円</th><th>NISA</th><th>合計</th>'
+            '<th title="まとまった入出金。口座間の移動は資産が動かないので入れない">入出金</th>'
+            '<th>前回比</th><th>含み益</th>'
             '<th title="含み益 ÷ 取得額。簿価ベースの含み損益率で、年率換算ではありません">利回り%</th></tr>')
     body = []
     for i, s in zip(idx, rows):
@@ -144,15 +146,17 @@ def _timeline_tab(a: Analysis) -> str:
             f'<tr><td class="l stick">{s.date}</td>{_num(s.usd_jpy)}'
             + "".join(f'<td>{_yen(s.by_class.get(c, 0))}</td>' for c in classes)
             + f'<td>{_yen(s.cash_usd)}</td><td>{_yen(s.cash_jpy)}</td><td>{_yen(s.nisa)}</td>'
-            f'<td><b>{_yen(s.total)}</b></td>{_signed(s.total - prev if prev is not None else None)}'
+            f'<td><b>{_yen(s.total)}</b></td>{_signed(s.flow) if s.flow else "<td></td>"}'
+            f'{_signed(s.total - prev if prev is not None else None)}'
             f'{_signed(s.pnl)}{_signed(s.yield_pct, ".2f")}</tr>')
     first, last = rows[0], rows[-1]
+    gain, flow_total, dietz = modified_dietz(rows)
     rate_diff = last.usd_jpy - first.usd_jpy if None not in (last.usd_jpy, first.usd_jpy) else None
     diff = (f'<tr class="sum"><td class="l stick">増減</td>{_signed(rate_diff, ",.2f")}'
             + "".join(_signed(last.by_class.get(c, 0) - first.by_class.get(c, 0)) for c in classes)
             + _signed(last.cash_usd - first.cash_usd) + _signed(last.cash_jpy - first.cash_jpy)
             + _signed(last.nisa - first.nisa) + _signed(last.total - first.total)
-            + '<td></td>' + _signed(last.pnl - first.pnl)
+            + _signed(flow_total) + '<td></td>' + _signed(last.pnl - first.pnl)
             + _signed((last.yield_pct - first.yield_pct) if None not in (last.yield_pct, first.yield_pct) else None, ".2f")
             + '</tr>')
     return (f'<h2 style="margin-top:0">{year} 年の資産推移（{len(rows)} 日分）</h2>'
@@ -162,7 +166,15 @@ def _timeline_tab(a: Analysis) -> str:
             '<li>実効レートは保有から逆算した値（USD建て保有の 円換算額 ÷ ドル額）で、DB には持たない。前回値を引き継いだ日は、引き継ぎ元の日付のレートになる。</li><li>「うち現金同等物」は資産クラスの現金同等物の内訳。ドル = 預り金(USD)・外貨建MMF・USD建の手入力資産。</li>'
             '<li>含み益・利回りは 株式 + 投資信託 + 外貨建MMF が対象（預り金・暗号資産・手入力資産は取得額を持たないため除外）。'
             '利回り = 含み益 ÷ 取得額 で、年率でも実現損益込みのリターンでもない。</li>'
-            f'<li>最下行は {first.date} → {last.date} の増減（利回りのみ pt 差）。</li></ul>')
+            f'<li>入出金は資産全体が増減したときだけ記録する。口座間の移動は合計が動かないので入れない。</li>'
+            f'<li>最下行は {first.date} → {last.date} の増減（利回りのみ pt 差）。</li></ul>'
+            f'<h2>期間リターン</h2><div class="card"><table>'
+            f'<tr><th>期間</th><th>期初</th><th>期末</th><th>増減</th><th>うち入出金</th><th>運用損益</th>'
+            f'<th title="入出金を残存日数で加重した修正ディーツ法">修正ディーツ利回り</th></tr>'
+            f'<tr><td class="l">{first.date} → {last.date}</td><td>{_yen(first.total)}</td>'
+            f'<td>{_yen(last.total)}</td>{_signed(last.total - first.total)}{_signed(flow_total)}'
+            f'{_signed(gain)}{_signed(dietz, ".2f")}</tr></table>'
+            f'<p class="note">運用損益 = 期末 − 期初 − 入出金。修正ディーツは年率換算ではなく、この期間の実績。</p></div>')
 
 
 def _donut(a: Analysis) -> str:

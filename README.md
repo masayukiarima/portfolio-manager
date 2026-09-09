@@ -98,7 +98,22 @@ uv run portfolio manual delete "BTC/ETH" --date 2026-08-30
 
 資産クラスは `米国株式 / 投資信託 / 金 / 国内株式 / 暗号資産 / 現金同等物 / その他`。
 
-### 5. 銘柄の資産クラスを上書きする
+### 5. まとまった入出金を記録する
+
+利回りを「相場で増えた分」と「自分で入れた分」に分けるために使う。**資産全体が増減したときだけ**記録し、
+口座間の移動（別口座 → SBI など）は合計が動かないので入れない。出金は負値。日々の少額は追わなくてよい。
+
+```bash
+uv run portfolio flow add "ボーナス入金" 900000 --date 2026-07-08
+uv run portfolio flow add "住宅ローン繰上返済" -2000000 --date 2026-07-24   # 出金は負値
+uv run portfolio flow list
+uv run portfolio flow delete "ボーナス入金" --date 2026-07-08
+```
+
+入出金は、その日以降で最初に取込のある日に載る（入金日に取込があるとは限らないため）。レポートの時系列
+タブに `入出金` 列と期間リターン（運用損益 = 期末 − 期初 − 入出金、および修正ディーツ利回り）が出る。
+
+### 6. 銘柄の資産クラスを上書きする
 
 分析では保有銘柄を上の資産クラスに振り分ける。既定で金 ETF（GLDM, GLD, IAU, 1540, 1326）は「金」。それ以外を変えたいとき:
 
@@ -108,7 +123,7 @@ uv run portfolio classify PBR その他    # 上書き
 uv run portfolio classify PBR --reset  # 上書きを削除
 ```
 
-### 6. 分析レポート（HTML）
+### 7. 分析レポート（HTML）
 
 ```bash
 uv run portfolio report                 # report.html を生成（git 管理外）
@@ -124,7 +139,7 @@ uv run portfolio report -o docs/2026-08-30.html
 
 推移は「各日付時点で、証券会社×テーブルごとの最新スナップショットを合算」する。取込していない日は前回値を引き継ぐので、ページによって保存日がずれても総資産が欠けない。
 
-### 7. SQL で直接確認する
+### 8. SQL で直接確認する
 
 #### `portfolio sql`（sqlite3 CLI 不要）
 
@@ -237,6 +252,7 @@ sqlite3 -header -column portfolio.db "SELECT * FROM latest_orders"   # ワンラ
 
 ### その他
 
+- `cash_flows` … まとまった入出金（`snapshot_date` + `label` で一意、出金は負値）。修正ディーツ利回りの計算に使う
 - `raw_imports` … 取り込んだ HTML 原本（sha256 で重複排除、`kind` = holdings/orders/funds/balances）。パーサ修正後に再処理するための保険
 - `latest_holdings` / `latest_orders` / `latest_funds` / `latest_balances` ビュー … 証券会社ごとの最新日付の行だけを返す
 
@@ -299,7 +315,7 @@ src/portfolio/
   db.py                      SQLite スキーマ・冪等 UPSERT・原本保存・列追加マイグレーション・手入力資産・銘柄分類
   analysis.py                資産クラス別の配分・推移・指標（NISA、税、通貨、逆指値カバー率）の計算
   report.py                  分析結果を自己完結 HTML（インライン SVG）に描画
-  cli.py                     import / show / orders / funds / balances / dates / manual / classify / report / sql
+  cli.py                     import / show / orders / funds / balances / dates / manual / flow / classify / report / sql
 tests/                       個人データを含まない合成フィクスチャでのテスト
 ```
 
