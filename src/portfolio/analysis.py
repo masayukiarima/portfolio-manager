@@ -21,12 +21,24 @@ _USD_CASH_CATEGORIES = {"預り金(USD)", "預り金(外貨)", "外貨建MMF"}
 
 @dataclass
 class Snapshot:
+    """ある日付時点の資産の断面（各ソースの最新スナップショットを合算したもの）。"""
+
     date: str
-    by_class: dict[str, float]
+    by_class: dict[str, float]                   # 資産クラス → 円
+    cash_usd: float = 0.0                        # 現金同等物のうち外貨（預り金USD・外貨建MMF・USD建の手入力）
+    cash_jpy: float = 0.0                        # 現金同等物のうち円
+    nisa: float = 0.0                            # NISA 口座の評価額（株式 + 投信）
+    cost: float = 0.0                            # 取得額（株式 + 投信 + MMF、含み益の分母）
+    pnl: float = 0.0                             # 含み益（株式 + 投信 + MMF）
 
     @property
     def total(self) -> float:
         return sum(self.by_class.values())
+
+    @property
+    def yield_pct(self) -> float | None:
+        """簿価ベースの含み損益率。年率換算ではない。"""
+        return self.pnl / self.cost * 100 if self.cost else None
 
 
 @dataclass
@@ -76,26 +88,66 @@ def _latest_per_key(conn: sqlite3.Connection, table: str, key_col: str, upto: st
     ).fetchall()
 
 
-def allocation_at(conn: sqlite3.Connection, upto: str, overrides: dict[str, str]) -> dict[str, float]:
+def _cost_jpy(row) -> float | None:
+    """取得額（円）。画面に取得額が無い証券会社（楽天）は 評価額 − 損益 で補う。"""
+    if row["acquisition_amount_jpy"] is not None:
+        return row["acquisition_amount_jpy"]
+    pnl = row["unrealized_pnl_jpy"]
+    return (row["market_value_jpy"] or 0) - pnl if pnl is not None else None
+
+
+def _build_snapshot(date: str, hold, funds, bals, manual, overrides: dict[str, str]) -> Snapshot:
+    """同一日付として扱う行の集合から断面を組み立てる。"""
     alloc = {c: 0.0 for c in ASSET_CLASSES}
-    for r in _latest_per_key(conn, "holdings", "broker, asset_class",upto):
+    cash = {"USD": 0.0, "JPY": 0.0}
+    for r in hold:
         cls = _holding_class(r, overrides)
         if cls:
             alloc[cls if cls in alloc else "その他"] += r["market_value_jpy"] or 0
-    for r in _latest_per_key(conn, "funds", "broker", upto):
+    for r in funds:
         alloc["投資信託"] += r["market_value_jpy"] or 0
-    brokers_with_balances = set()
-    for r in _latest_per_key(conn, "balances", "broker", upto):
-        brokers_with_balances.add(r["broker"])
+    brokers_with_balances = {r["broker"] for r in bals}
+    for r in bals:
         if r["is_cash"] and not r["is_total"]:
-            alloc["現金同等物"] += r["market_value_jpy"] or 0
+            cash["USD" if r["category"] in _USD_CASH_CATEGORIES else "JPY"] += r["market_value_jpy"] or 0
     # balances がまだ無い証券会社は holdings の 現金/MMF 行で代用
-    for r in _latest_per_key(conn, "holdings", "broker, asset_class",upto):
+    for r in hold:
         if r["broker"] not in brokers_with_balances and r["asset_class"] in _CASH_HOLDING_CLASSES:
-            alloc["現金同等物"] += r["market_value_jpy"] or 0
-    for r in _latest_per_key(conn, "manual_assets", "name", upto):
-        alloc[r["asset_class"] if r["asset_class"] in alloc else "その他"] += r["amount_jpy"]
-    return {k: v for k, v in alloc.items() if v}
+            cash["USD" if r["currency"] == "USD" else "JPY"] += r["market_value_jpy"] or 0
+    for r in manual:
+        cls = r["asset_class"] if r["asset_class"] in alloc else "その他"
+        if cls == "現金同等物":
+            cash["USD" if r["currency"] == "USD" else "JPY"] += r["amount_jpy"]
+        else:
+            alloc[cls] += r["amount_jpy"]
+    alloc["現金同等物"] += cash["USD"] + cash["JPY"]
+
+    sec = [r for r in hold if r["asset_class"] not in _CASH_HOLDING_CLASSES]
+    # 含み益・取得額の対象は 株式・投信・外貨建MMF（預り金は損益を持たない）
+    pnl_rows = sec + [r for r in hold if r["asset_class"] == "外貨建MMF"] + list(funds)
+    return Snapshot(
+        date=date, by_class={k: v for k, v in alloc.items() if v},
+        cash_usd=cash["USD"], cash_jpy=cash["JPY"],
+        nisa=sum(r["market_value_jpy"] or 0 for r in sec + list(funds) if r["is_nisa"]),
+        cost=sum(c for c in (_cost_jpy(r) for r in pnl_rows) if c is not None),
+        pnl=sum(r["unrealized_pnl_jpy"] or 0 for r in pnl_rows),
+    )
+
+
+def snapshot_at(conn: sqlite3.Connection, upto: str, overrides: dict[str, str]) -> Snapshot:
+    """upto 以前で各ソースが持つ最新の行を集めて、その日付時点の断面を返す。"""
+    return _build_snapshot(
+        upto,
+        _latest_per_key(conn, "holdings", "broker, asset_class", upto),
+        _latest_per_key(conn, "funds", "broker", upto),
+        _latest_per_key(conn, "balances", "broker", upto),
+        _latest_per_key(conn, "manual_assets", "name", upto),
+        overrides,
+    )
+
+
+def allocation_at(conn: sqlite3.Connection, upto: str, overrides: dict[str, str]) -> dict[str, float]:
+    return snapshot_at(conn, upto, overrides).by_class
 
 
 def analyze(conn: sqlite3.Connection) -> Analysis:
@@ -105,20 +157,22 @@ def analyze(conn: sqlite3.Connection) -> Analysis:
     if not dates:
         raise ValueError("データがありません。先に portfolio import を実行してください")
     as_of = dates[-1]
-    history = [Snapshot(d, allocation_at(conn, d, overrides)) for d in dates]
-    allocation = history[-1].by_class
-    total = sum(allocation.values())
-
-    hold = _latest_per_key(conn, "holdings", "broker, asset_class",as_of)
+    hold = _latest_per_key(conn, "holdings", "broker, asset_class", as_of)
     funds = _latest_per_key(conn, "funds", "broker", as_of)
-    bals = [r for r in _latest_per_key(conn, "balances", "broker", as_of) if r["is_cash"] and not r["is_total"]]
+    bals_all = _latest_per_key(conn, "balances", "broker", as_of)
+    bals = [r for r in bals_all if r["is_cash"] and not r["is_total"]]
     manual = _latest_per_key(conn, "manual_assets", "name", as_of)
     orders = _latest_per_key(conn, "orders", "broker", as_of)
 
+    # 最新日は取得済みの行から組み立て、それ以前の日付は都度引き直す
+    current = _build_snapshot(as_of, hold, funds, bals_all, manual, overrides)
+    history = [snapshot_at(conn, d, overrides) for d in dates[:-1]] + [current]
+    allocation = current.by_class
+    total = current.total
+
     sec = [r for r in hold if r["asset_class"] not in _CASH_HOLDING_CLASSES]
-    unrealized = sum(r["unrealized_pnl_jpy"] or 0 for r in sec) + sum(f["unrealized_pnl_jpy"] or 0 for f in funds) \
-        + sum(r["unrealized_pnl_jpy"] or 0 for r in hold if r["asset_class"] == "外貨建MMF")
-    nisa = sum(r["market_value_jpy"] or 0 for r in sec if r["is_nisa"]) + sum(f["market_value_jpy"] or 0 for f in funds if f["is_nisa"])
+    unrealized = current.pnl
+    nisa = current.nisa
     taxable = sum(r["unrealized_pnl_jpy"] or 0 for r in sec if not r["is_nisa"]) \
         + sum(f["unrealized_pnl_jpy"] or 0 for f in funds if not f["is_nisa"]) \
         + sum(r["unrealized_pnl_jpy"] or 0 for r in hold if r["asset_class"] == "外貨建MMF")
@@ -148,8 +202,10 @@ def analyze(conn: sqlite3.Connection) -> Analysis:
     for d in top:
         d["pct"] = d["mv"] / total * 100 if total else 0
 
+    # 0円の手入力は「この日以降は実データを使う」ための打ち切り行なので一覧には出さない
     cash_items = [{"who": r["broker"], "label": r["label"], "mv": r["market_value_jpy"] or 0} for r in bals] \
-        + [{"who": "手入力", "label": r["name"], "mv": r["amount_jpy"]} for r in manual if r["asset_class"] == "現金同等物"]
+        + [{"who": "手入力", "label": r["name"], "mv": r["amount_jpy"]} for r in manual
+           if r["asset_class"] == "現金同等物" and r["amount_jpy"]]
 
     stops = {(o["broker"], o["symbol"]) for o in orders if o["side"] == "売" and o["trigger_price"] is not None}
     equity = [r for r in sec if r["asset_class"] in ("米国株式", "外国株式", "国内株式")]
@@ -175,7 +231,7 @@ def analyze(conn: sqlite3.Connection) -> Analysis:
         for f in funds), key=lambda d: -d["mv"])
     manual_rows = [{"name": r["name"], "cls": r["asset_class"], "currency": r["currency"], "mv": r["amount_jpy"],
                     "date": r["snapshot_date"], "note": r["note"], "share": r["amount_jpy"] / total * 100 if total else 0}
-                   for r in manual]
+                   for r in manual if r["amount_jpy"]]
 
     return Analysis(
         as_of=as_of, allocation=allocation, history=history, total=total, unrealized_pnl=unrealized,

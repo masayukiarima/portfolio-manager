@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from portfolio import db as dbmod
-from portfolio.analysis import ASSET_CLASSES, allocation_at, analyze
+from portfolio.analysis import ASSET_CLASSES, allocation_at, analyze, snapshot_at
 from portfolio.cli import main
 from portfolio.report import render
 
@@ -95,3 +95,30 @@ def test_manual_list_and_delete(tmp_path, capsys):
     assert main(["manual", "delete", "--db", str(db), "BTC/ETH", "--date", "2026-08-29"]) == 0
     assert "1件" in capsys.readouterr().out
     assert "暗号資産" not in allocation_at(dbmod.connect(db), "2026-08-30", {})
+
+
+def test_timeline_snapshot_fields(tmp_path, capsys):
+    db = tmp_path / "t.db"
+    _seed(db, capsys)
+    conn = dbmod.connect(db)
+
+    s30 = snapshot_at(conn, "2026-08-30", {})
+    # 現金同等物の内訳は資産クラスの現金同等物と一致する（ドル = 預り金USD + MMF、円 = スイープ + 手入力）
+    assert s30.cash_usd == 569562 + 21284
+    assert s30.cash_jpy == 1800000 + 455688 + 489022
+    assert s30.cash_usd + s30.cash_jpy == s30.by_class["現金同等物"]
+    # 含み益は取得額を持つ資産（株式・投信・MMF）だけが対象で、利回りは簿価ベース
+    assert s30.cost > 0 and s30.pnl != 0
+    assert s30.yield_pct == s30.pnl / s30.cost * 100
+    assert s30.nisa > 0
+
+    a = analyze(conn)
+    last = a.history[-1]
+    assert last.date == a.as_of and last.total == a.total
+    assert last.pnl == a.unrealized_pnl and last.nisa == a.nisa_value
+
+    html = render(a)
+    assert 'id="tab-timeline"' in html and "時系列" in html and "利回り%" in html
+    # 今年（as_of の年）の取込日がすべて行になり、最下行に期間増減が入る
+    assert html.count('<td class="l stick">') == len(a.history) + 1
+    assert '<td class="l stick">2026-08-29</td>' in html and "増減" in html

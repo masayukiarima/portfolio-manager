@@ -59,6 +59,11 @@ svg text{{fill:var(--ink2);font-size:11px}} svg .lab{{fill:var(--ink);font-size:
 [hidden]{{display:none!important}}
 td.pos{{color:#0a7a2f}} td.neg{{color:#c0392b}} @media (prefers-color-scheme: dark){{td.pos{{color:#4cc46f}} td.neg{{color:#ff7b6b}}}}
 tr.sum td{{font-weight:600;border-top:2px solid var(--line)}}
+th.grp{{text-align:center;color:var(--ink3);font-weight:600;border-bottom:1px solid var(--line)}}
+.stick{{position:sticky;left:0;background:var(--card);z-index:1}}
+/* 列数の多い表は本文幅(1100px)を超えて画面いっぱいまで広げる */
+.wide{{width:min(96vw,1500px);margin-left:50%;transform:translateX(-50%)}}
+table.dense th,table.dense td{{padding:4px 6px;font-size:12px}}
 """
 
 
@@ -117,6 +122,44 @@ def _holdings_tab(a: Analysis) -> str:
             f'<h2>現金同等物</h2><div class="card"><table><tr><th>口座</th><th>項目</th><th>評価額(円)</th><th>全体比</th></tr>{cash}</table></div>'
             f'<h2>手入力資産</h2><div class="card"><table><tr><th>名前</th><th>資産クラス</th><th>通貨</th><th>金額(円)</th><th>全体比</th><th>日付</th><th>メモ</th></tr>{manual}</table></div>'
             '<p class="note">★ = NISA 口座。逆指値 ○ = 売り逆指値注文あり。損益は円換算、投信の基準価額・取得単価は 1万口あたり。</p>')
+
+
+def _timeline_tab(a: Analysis) -> str:
+    """今年の各取込日を1行にした資産一覧。前回比は直前の取込日（年をまたぐ場合も）との差。"""
+    year = a.as_of[:4]
+    idx = [i for i, s in enumerate(a.history) if s.date[:4] == year] or list(range(len(a.history)))
+    rows = [a.history[i] for i in idx]
+    classes = [c for c in ASSET_CLASSES if any(s.by_class.get(c) for s in rows)]
+    head = (f'<tr><th rowspan="2" class="stick">日付</th><th class="grp" colspan="{len(classes)}">資産クラス（円）</th>'
+            '<th class="grp" colspan="2">うち現金同等物</th><th class="grp" colspan="5">合計・損益</th></tr><tr>'
+            + "".join(f'<th><i class="sw" style="background:var(--s{_CLASS_SLOT[c]})"></i>{_esc(c)}</th>' for c in classes)
+            + '<th>ドル</th><th>円</th><th>NISA</th><th>合計</th><th>前回比</th><th>含み益</th>'
+            '<th title="含み益 ÷ 取得額。簿価ベースの含み損益率で、年率換算ではありません">利回り%</th></tr>')
+    body = []
+    for i, s in zip(idx, rows):
+        prev = a.history[i - 1].total if i > 0 else None
+        body.append(
+            f'<tr><td class="l stick">{s.date}</td>'
+            + "".join(f'<td>{_yen(s.by_class.get(c, 0))}</td>' for c in classes)
+            + f'<td>{_yen(s.cash_usd)}</td><td>{_yen(s.cash_jpy)}</td><td>{_yen(s.nisa)}</td>'
+            f'<td><b>{_yen(s.total)}</b></td>{_signed(s.total - prev if prev is not None else None)}'
+            f'{_signed(s.pnl)}{_signed(s.yield_pct, ".2f")}</tr>')
+    first, last = rows[0], rows[-1]
+    diff = (f'<tr class="sum"><td class="l stick">増減</td>'
+            + "".join(_signed(last.by_class.get(c, 0) - first.by_class.get(c, 0)) for c in classes)
+            + _signed(last.cash_usd - first.cash_usd) + _signed(last.cash_jpy - first.cash_jpy)
+            + _signed(last.nisa - first.nisa) + _signed(last.total - first.total)
+            + '<td></td>' + _signed(last.pnl - first.pnl)
+            + _signed((last.yield_pct - first.yield_pct) if None not in (last.yield_pct, first.yield_pct) else None, ".2f")
+            + '</tr>')
+    return (f'<h2 style="margin-top:0">{year} 年の資産推移（{len(rows)} 日分）</h2>'
+            f'<div class="card"><table class="dense">{head}{"".join(body)}{diff}</table></div>'
+            f'<ul class="note"><li>1行 = 取込のあった日。各日付時点で証券会社・テーブルごとの最新スナップショットを合算し、'
+            '取込していない項目は前回値を引き継ぐ（値が動いていない日は、その項目を取り込んでいないだけの場合がある）。</li>'
+            '<li>「うち現金同等物」は資産クラスの現金同等物の内訳。ドル = 預り金(USD)・外貨建MMF・USD建の手入力資産。</li>'
+            '<li>含み益・利回りは 株式 + 投資信託 + 外貨建MMF が対象（預り金・暗号資産・手入力資産は取得額を持たないため除外）。'
+            '利回り = 含み益 ÷ 取得額 で、年率でも実現損益込みのリターンでもない。</li>'
+            f'<li>最下行は {first.date} → {last.date} の増減（利回りのみ pt 差）。</li></ul>')
 
 
 def _donut(a: Analysis) -> str:
@@ -235,8 +278,9 @@ def render(a: Analysis) -> str:
     return f"""<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Portfolio Report {a.as_of}</title><style>{_css()}</style></head><body><main>
 <h1>ポートフォリオ分析</h1><p class="sub">{a.as_of} 時点のスナップショット（生成: {datetime.now():%Y-%m-%d %H:%M}）。手入力資産・暗号資産は最新の登録値を引き継ぎ。</p>
-<div class="tabs" role="tablist"><button role="tab" aria-selected="true" data-tab="analysis">分析</button><button role="tab" aria-selected="false" data-tab="holdings">保有一覧</button></div>
+<div class="tabs" role="tablist"><button role="tab" aria-selected="true" data-tab="analysis">分析</button><button role="tab" aria-selected="false" data-tab="holdings">保有一覧</button><button role="tab" aria-selected="false" data-tab="timeline">時系列</button></div>
 <section id="tab-holdings" hidden>{_holdings_tab(a)}</section>
+<section id="tab-timeline" class="wide" hidden>{_timeline_tab(a)}</section>
 <section id="tab-analysis">
 <div class="tiles">{tiles_html}</div>
 <div class="row" style="margin-top:20px">
@@ -257,7 +301,8 @@ document.querySelectorAll('.tabs button').forEach(b=>b.addEventListener('click',
   document.querySelectorAll('main > section').forEach(s=>s.hidden=(s.id!=='tab-'+b.dataset.tab));
   history.replaceState(null,'','#'+b.dataset.tab);
 }}));
-if(location.hash==='#holdings')document.querySelector('[data-tab=holdings]').click();
+const h0=location.hash.slice(1),t0=h0&&document.querySelector('[data-tab='+CSS.escape(h0)+']');
+if(t0)t0.click();
 const tip=document.getElementById('tip'),xh=document.getElementById('xh');
 document.querySelectorAll('[data-tip]').forEach(el=>{{
   el.addEventListener('mousemove',e=>{{tip.style.display='block';tip.textContent='';el.dataset.tip.split('\\\\n').forEach((l,i)=>{{if(i)tip.appendChild(document.createElement('br'));tip.appendChild(document.createTextNode(l));}});
