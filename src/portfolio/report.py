@@ -47,7 +47,7 @@ h1{{font-size:22px;margin:0 0 4px}} h2{{font-size:16px;margin:32px 0 12px;color:
 .card{{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px;overflow-x:auto}}
 .card h3{{margin:0 0 8px;font-size:14px}}
 table{{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}} th,td{{padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}}
-th{{color:var(--ink2);font-weight:500;font-size:12px}} td:first-child,th:first-child{{text-align:left}} td.l{{text-align:left}}
+th{{color:var(--ink2);font-weight:500;font-size:12px}} td:first-child,th:first-child{{text-align:left}} td.l,th.l{{text-align:left}}
 .sw{{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}}
 .legend{{display:flex;flex-wrap:wrap;gap:6px 16px;margin:8px 0 0;font-size:12px;color:var(--ink2)}}
 svg text{{fill:var(--ink2);font-size:11px}} svg .lab{{fill:var(--ink);font-size:12px;font-weight:600}}
@@ -94,9 +94,10 @@ def _holdings_tab(a: Analysis) -> str:
         pnl = sum(r["pnl"] or 0 for r in rows)
         total = (f'<tr class="sum"><td class="l" colspan="9">合計 {len(rows)} 銘柄</td><td>{_yen(cost)}</td><td>{_yen(mv)}</td>'
                  f'{_signed(pnl)}{_signed(pnl / cost * 100 if cost else None, ".1f")}<td>{_pct(mv / (a.total or 1) * 100)}</td><td></td><td></td></tr>')
-        return ("<table><tr><th>証券</th><th>口座</th><th>区分</th><th>銘柄</th><th>名称</th><th>数量</th><th>通貨</th>"
+        return ("<table><tr><th>証券</th><th class='l'>口座</th><th class='l'>区分</th><th class='l'>銘柄</th>"
+                "<th class='l'>名称</th><th>数量</th><th class='l'>通貨</th>"
                 "<th>現在値</th><th>取得単価</th><th>取得額(円)</th><th>評価額(円)</th><th>損益(円)</th><th>損益%</th>"
-                f"<th>全体比</th><th>逆指値</th><th>日付</th></tr>{body}{total}</table>")
+                f"<th>全体比</th><th>逆指値</th><th class='l'>日付</th></tr>{body}{total}</table>")
 
     def fund_table(rows: list[dict]) -> str:
         body = "".join(
@@ -109,8 +110,10 @@ def _holdings_tab(a: Analysis) -> str:
         pnl = sum(r["pnl"] or 0 for r in rows)
         total = (f'<tr class="sum"><td class="l" colspan="6">合計 {len(rows)} 本</td><td>{_yen(cost)}</td><td>{_yen(mv)}</td>'
                  f'{_signed(pnl)}{_signed(pnl / cost * 100 if cost else None, ".1f")}<td>{_pct(mv / (a.total or 1) * 100)}</td><td></td></tr>')
-        return ("<table><tr><th>証券</th><th>口座</th><th>ファンド名</th><th>口数</th><th>基準価額</th><th>取得単価</th>"
-                f"<th>取得額(円)</th><th>評価額(円)</th><th>損益(円)</th><th>損益%</th><th>全体比</th><th>日付</th></tr>{body}{total}</table>")
+        return ("<table><tr><th>証券</th><th class='l'>口座</th><th class='l'>ファンド名</th>"
+                "<th>口数</th><th>基準価額</th><th>取得単価</th>"
+                f"<th>取得額(円)</th><th>評価額(円)</th><th>損益(円)</th><th>損益%</th><th>全体比</th>"
+                f"<th class='l'>日付</th></tr>{body}{total}</table>")
 
     cash = "".join(f'<tr><td class="l">{_esc(c["who"])}</td><td class="l">{_esc(c["label"])}</td><td>{_yen(c["mv"])}</td>'
                    f'<td>{_pct(c["mv"] / (a.total or 1) * 100)}</td></tr>' for c in a.cash_items)
@@ -119,8 +122,8 @@ def _holdings_tab(a: Analysis) -> str:
                      for r in a.manual_rows)
     return (f'<h2 style="margin-top:0">株式・ETF（{len(a.holdings_rows)} 件、評価額順）</h2><div class="card">{stock_table(a.holdings_rows)}</div>'
             f'<h2>投資信託（{len(a.funds_rows)} 件）</h2><div class="card">{fund_table(a.funds_rows)}</div>'
-            f'<h2>現金同等物</h2><div class="card"><table><tr><th>口座</th><th>項目</th><th>評価額(円)</th><th>全体比</th></tr>{cash}</table></div>'
-            f'<h2>手入力資産</h2><div class="card"><table><tr><th>名前</th><th>資産クラス</th><th>通貨</th><th>金額(円)</th><th>全体比</th><th>日付</th><th>メモ</th></tr>{manual}</table></div>'
+            f'<h2>現金同等物</h2><div class="card"><table><tr><th>口座</th><th class="l">項目</th><th>評価額(円)</th><th>全体比</th></tr>{cash}</table></div>'
+            f'<h2>手入力資産</h2><div class="card"><table><tr><th>名前</th><th class="l">資産クラス</th><th class="l">通貨</th><th>金額(円)</th><th>全体比</th><th class="l">日付</th><th class="l">メモ</th></tr>{manual}</table></div>'
             '<p class="note">★ = NISA 口座。逆指値 ○ = 売り逆指値注文あり。損益は円換算、投信の基準価額・取得単価は 1万口あたり。</p>')
 
 
@@ -303,10 +306,10 @@ def render(a: Analysis) -> str:
     <details style="margin-top:8px"><summary class="note">表で見る</summary><table><tr><th>資産クラス</th><th>評価額(円)</th><th>比率</th></tr>{alloc_rows}</table></details></div>
   <div class="card"><h3>通貨エクスポージャ</h3><table><tr><th>通貨</th><th>評価額(円)</th><th>比率</th></tr>{cur_rows}</table>
     <p class="note">目安: 円高 10% で約 −{_man(a.currency.get("USD", 0) * 0.1)}、米国株 20% 下落で約 −{_man(us_equity_like * 0.2)}。</p>
-    <h3 style="margin-top:16px">現金同等物の内訳</h3><table><tr><th>口座</th><th>項目</th><th>評価額(円)</th></tr>{cash_rows}</table></div>
+    <h3 style="margin-top:16px">現金同等物の内訳</h3><table><tr><th>口座</th><th class="l">項目</th><th>評価額(円)</th></tr>{cash_rows}</table></div>
 </div>
 <h2>資産推移</h2><div class="card">{_history(a)}<p class="note">各日付時点で、証券会社・テーブルごとの最新スナップショットを合算（取込していない日は前回値を引き継ぐ）。</p></div>
-<h2>上位ポジション（証券会社・口座横断）</h2><div class="card"><table><tr><th>銘柄</th><th>名称</th><th>評価額(円)</th><th>全体比</th></tr>{top_rows}</table></div>
+<h2>上位ポジション（証券会社・口座横断）</h2><div class="card"><table><tr><th>銘柄</th><th class="l">名称</th><th>評価額(円)</th><th>全体比</th></tr>{top_rows}</table></div>
 <ul class="note"><li>本レポートは保有状況の事実整理であり、投資助言ではありません。</li><li>資産クラスの上書きは <code>portfolio classify</code>、手入力資産は <code>portfolio manual</code> で管理。</li></ul>
 </section>
 </main><div class="tip" id="tip"></div>
