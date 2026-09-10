@@ -66,7 +66,8 @@ def cmd_import(args: argparse.Namespace) -> int:
             # 1ページに複数種別が載ることがある（楽天: holdings+balances、SBI保有証券一覧: holdings+funds）
             parts = [(k, v) for k, v in (("holdings", result.holdings), ("orders", result.orders),
                                          ("funds", result.funds), ("balances", result.balances)) if v]
-            label = f"{result.broker} {snap} " + ", ".join(f"{k} {len(v)}件" for k, v in parts)
+            label = f"{result.broker} {snap} " + (", ".join(f"{k} {len(v)}件" for k, v in parts)
+                                                  or f"{result.kind} 0件")
             if args.dry_run:
                 _print_records(result)
                 print(f"[dry-run] {path.name}: {label}")
@@ -77,7 +78,8 @@ def cmd_import(args: argparse.Namespace) -> int:
                       "funds": dbmod.upsert_funds, "balances": dbmod.upsert_balances}[k](conn, v)
             new_raw = dbmod.record_raw_import(
                 conn, snapshot_date=snap.isoformat(), broker=result.broker,
-                source_file=path.name, content=raw, row_count=n, kind="+".join(k for k, _ in parts),
+                source_file=path.name, content=raw, row_count=n,
+                kind="+".join(k for k, _ in parts) or result.kind,
             )
             note = "" if new_raw else " (同一内容の再取込)"
             print(f"[ok] {path.name}: {label} 取込{note}")

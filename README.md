@@ -258,7 +258,9 @@ sqlite3 -header -column portfolio.db "SELECT * FROM latest_orders"   # ワンラ
 
 - `cash_flows` … まとまった入出金（`snapshot_date` + `label` で一意、出金は負値）。修正ディーツ利回りの計算に使う
 - `raw_imports` … 取り込んだ HTML 原本（sha256 で重複排除、`kind` = holdings/orders/funds/balances）。パーサ修正後に再処理するための保険
-- `latest_holdings` / `latest_orders` / `latest_funds` / `latest_balances` ビュー … 証券会社ごとの最新日付の行だけを返す
+- `latest_holdings` / `latest_orders` / `latest_funds` / `latest_balances` ビュー … 証券会社ごとの最新日付の行だけを返す。
+  `latest_orders` だけは「注文0件」を扱うため、`raw_imports` に残る注文画面の取込日より古い行を除く
+  （全部約定・取消した日は行が1件も入らないので、それだけだと前回の注文が最新のまま残ってしまう）
 
 ### クエリ例
 

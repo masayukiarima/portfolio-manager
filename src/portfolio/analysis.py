@@ -199,6 +199,15 @@ def snapshot_at(conn: sqlite3.Connection, upto: str, overrides: dict[str, str]) 
     )
 
 
+def latest_orders(conn: sqlite3.Connection, upto: str) -> list:
+    """upto 時点で有効な注文。注文画面を取り込んだ日より古い行は、その後 0 件になった注文なので外す。"""
+    captured = {r["broker"]: r["d"] for r in conn.execute(
+        "SELECT broker, MAX(snapshot_date) d FROM raw_imports "
+        "WHERE kind LIKE '%orders%' AND snapshot_date <= ? GROUP BY broker", (upto,))}
+    return [r for r in _latest_per_key(conn, "orders", "broker", upto)
+            if r["snapshot_date"] >= captured.get(r["broker"], r["snapshot_date"])]
+
+
 def allocation_at(conn: sqlite3.Connection, upto: str, overrides: dict[str, str]) -> dict[str, float]:
     return snapshot_at(conn, upto, overrides).by_class
 
@@ -215,7 +224,7 @@ def analyze(conn: sqlite3.Connection) -> Analysis:
     bals_all = _latest_per_key(conn, "balances", "broker", as_of)
     bals = [r for r in bals_all if r["is_cash"] and not r["is_total"]]
     manual = _latest_per_key(conn, "manual_assets", "name", as_of)
-    orders = _latest_per_key(conn, "orders", "broker", as_of)
+    orders = latest_orders(conn, as_of)
 
     # 最新日は取得済みの行から組み立て、それ以前の日付は都度引き直す
     current = _build_snapshot(as_of, hold, funds, bals_all, manual, overrides)

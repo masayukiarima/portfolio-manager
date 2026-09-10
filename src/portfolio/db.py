@@ -169,10 +169,17 @@ SELECT h.* FROM holdings h
 JOIN (SELECT broker, MAX(snapshot_date) AS d FROM holdings GROUP BY broker) m
   ON h.broker = m.broker AND h.snapshot_date = m.d;
 
-CREATE VIEW IF NOT EXISTS latest_orders AS
+-- 注文は「0件」も意味を持つ（全部約定・取消した）。行が0件だと前回の日付が最新のまま残るので、
+-- raw_imports に残る「その証券会社の注文画面を取り込んだ日」より古い行は最新から外す。
+-- 定義を変えたときに作り直せるよう、毎回 DROP してから作る。
+DROP VIEW IF EXISTS latest_orders;
+CREATE VIEW latest_orders AS
 SELECT o.* FROM orders o
 JOIN (SELECT broker, MAX(snapshot_date) AS d FROM orders GROUP BY broker) m
-  ON o.broker = m.broker AND o.snapshot_date = m.d;
+  ON o.broker = m.broker AND o.snapshot_date = m.d
+LEFT JOIN (SELECT broker, MAX(snapshot_date) AS c FROM raw_imports
+           WHERE kind LIKE '%orders%' GROUP BY broker) r ON o.broker = r.broker
+WHERE r.c IS NULL OR o.snapshot_date >= r.c;
 
 CREATE VIEW IF NOT EXISTS latest_funds AS
 SELECT f.* FROM funds f

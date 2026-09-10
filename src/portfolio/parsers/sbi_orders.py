@@ -21,7 +21,9 @@ _DT_RE = re.compile(r"(\d{4})/(\d{2})/(\d{2})(?:\s+(\d{2}:\d{2}))?")
 
 
 def matches(html: str) -> bool:
-    return "sbisec" in html and "国内注文日時" in html
+    # 注文が0件だと見出し行（国内注文日時）ごと出ないので、空表示の文言でも注文画面と判定する。
+    # これを拾わないと、同じタイトルの保有一覧として誤判定されてしまう。
+    return "sbisec" in html and ("国内注文日時" in html or "注文履歴は見つかりませんでした" in html)
 
 
 def parse(html: str) -> ParseResult:

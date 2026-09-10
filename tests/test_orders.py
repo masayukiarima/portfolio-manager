@@ -2,8 +2,9 @@ from datetime import date
 from pathlib import Path
 
 from portfolio import db as dbmod
+from portfolio.analysis import latest_orders
 from portfolio.cli import parse_path
-from portfolio.parsers import decode_html, detect, rakuten_orders, sbi_orders
+from portfolio.parsers import decode_html, detect, parse_html, rakuten_orders, sbi_orders
 
 FIX = Path(__file__).parent / "fixtures"
 
@@ -13,6 +14,18 @@ def test_detect_distinguishes_orders_from_holdings():
     assert detect(decode_html((FIX / "sbi_foreign_summary.html").read_bytes())) == ("sbi", "holdings")
     assert detect(decode_html((FIX / "rakuten_orders.html").read_bytes())) == ("rakuten", "orders")
     assert detect(decode_html((FIX / "rakuten_possess_all.html").read_bytes())) == ("rakuten", "holdings")
+
+
+def test_sbi_orders_page_with_no_orders():
+    """注文が0件だと見出し行ごと消えるが、保有一覧ではなく注文画面として判定する。"""
+    html = ('<html><body class="sbisec"><article class="main-content">'
+            '<p>現在の現地約定日 : 2026/09/10</p>'
+            '<p>指定された条件での注文履歴は見つかりませんでした。</p>'
+            '</article></body></html>')
+    assert detect(html) == ("sbi", "orders")
+    res = parse_html(html)
+    assert res.kind == "orders" and res.orders == []
+    assert res.warnings and "注文行が見つかりませんでした" in res.warnings[0]
 
 
 def test_sbi_orders_parse():
@@ -129,3 +142,27 @@ def test_raw_imports_kind_migration(tmp_path):
     assert dbmod.record_raw_import(conn, snapshot_date="2026-08-29", broker="sbi", source_file="x",
                                    content=b"x", row_count=1, kind="orders") is True
     assert conn.execute("SELECT kind FROM raw_imports").fetchone()[0] == "orders"
+
+
+def test_empty_orders_capture_supersedes_older_orders(tmp_path):
+    """注文を全部取り消した日は 0 件で取り込まれる。行が無くても前の日の注文を残さない。"""
+    conn = dbmod.connect(tmp_path / "t.db")
+    _, res = parse_path(FIX / "sbi_foreign_orders.html")
+    res.snapshot_date = date(2026, 9, 1)
+    for o in res.orders:
+        o.snapshot_date = res.snapshot_date
+    dbmod.upsert_orders(conn, res.orders)
+    dbmod.record_raw_import(conn, snapshot_date="2026-09-01", broker="sbi",
+                            source_file="orders.html", content=b"x", row_count=len(res.orders),
+                            kind="orders")
+    assert len(latest_orders(conn, "2026-09-01")) == len(res.orders)
+    assert len(conn.execute("SELECT * FROM latest_orders").fetchall()) == len(res.orders)
+
+    # 9/10 に注文0件の画面を取り込む（orders テーブルには行が増えない）
+    dbmod.record_raw_import(conn, snapshot_date="2026-09-10", broker="sbi",
+                            source_file="orders_empty.html", content=b"y", row_count=0,
+                            kind="orders")
+    assert latest_orders(conn, "2026-09-10") == []
+    assert conn.execute("SELECT * FROM latest_orders").fetchall() == []
+    # 取込前の日付で見れば、その時点で有効だった注文は残っている
+    assert len(latest_orders(conn, "2026-09-05")) == len(res.orders)
