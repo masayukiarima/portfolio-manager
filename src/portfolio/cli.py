@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import glob
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, time
 from pathlib import Path
 
 from portfolio import db as dbmod
@@ -11,6 +11,25 @@ from portfolio.models import ParseResult
 from portfolio.parsers import decode_html, parse_html
 
 DEFAULT_IMPORT_GLOB = "imports/**/*.html"
+JP_MARKET_CLOSE = time(15, 30)   # 東証の大引け。これより前に保存した画面の国内株式は前営業日の終値
+
+
+def timing_notes(mtime: datetime, result: ParseResult, today: date) -> list[str]:
+    """保存時刻から「その画面がいつの値か」を判断して助言する。
+
+    取込日はファイルの更新日時から決まるので、保存し直すのを忘れると前の日に入る。
+    国内株式は大引け前に保存すると前営業日の終値のままになる（投資信託の基準価額は前夕に
+    公表済みなので朝の保存でも当日更新される。米国株も前夜に引けているので朝でよい）。
+    """
+    notes = []
+    if mtime.date() < today:
+        notes.append(f"{mtime:%m/%d %H:%M} 保存のファイルです。{mtime:%Y-%m-%d} 分として取り込みました。"
+                     "今日の値にするには保存し直してください")
+    if (any(h.asset_class == "国内株式" for h in result.holdings)
+            and mtime.weekday() < 5 and mtime.time() < JP_MARKET_CLOSE):
+        notes.append(f"{mtime:%H:%M} 保存なので国内株式は前営業日の終値です。"
+                     "当日の終値を入れるなら 15:30 以降に保存し直してください")
+    return notes
 
 
 def parse_path(path: Path, override: date | None = None) -> tuple[bytes, ParseResult]:
@@ -54,6 +73,7 @@ def cmd_import(args: argparse.Namespace) -> int:
         if not paths:
             print(f"[skip] 該当なし: {pattern}", file=sys.stderr)
         for path in paths:
+            mtime = datetime.fromtimestamp(path.stat().st_mtime)
             try:
                 raw, result = parse_path(path, override)
             except Exception as e:  # noqa: BLE001
@@ -68,9 +88,12 @@ def cmd_import(args: argparse.Namespace) -> int:
                                          ("funds", result.funds), ("balances", result.balances)) if v]
             label = f"{result.broker} {snap} " + (", ".join(f"{k} {len(v)}件" for k, v in parts)
                                                   or f"{result.kind} 0件")
+            notes = [] if override else timing_notes(mtime, result, date.today())
             if args.dry_run:
                 _print_records(result)
                 print(f"[dry-run] {path.name}: {label}")
+                for t in notes:
+                    print(f"[note] {path.name}: {t}")
                 continue
             n = 0
             for k, v in parts:
@@ -81,8 +104,10 @@ def cmd_import(args: argparse.Namespace) -> int:
                 source_file=path.name, content=raw, row_count=n,
                 kind="+".join(k for k, _ in parts) or result.kind,
             )
-            note = "" if new_raw else " (同一内容の再取込)"
-            print(f"[ok] {path.name}: {label} 取込{note}")
+            again = "" if new_raw else " (同一内容の再取込)"
+            print(f"[ok] {path.name}: {label} 取込{again}")
+            for t in notes:
+                print(f"[note] {path.name}: {t}")
     return status
 
 
