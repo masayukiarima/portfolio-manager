@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import glob
 import sys
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 from portfolio import db as dbmod
@@ -11,24 +11,46 @@ from portfolio.models import ParseResult
 from portfolio.parsers import decode_html, parse_html
 
 DEFAULT_IMPORT_GLOB = "imports/**/*.html"
-JP_MARKET_CLOSE = time(15, 30)   # 東証の大引け。これより前に保存した画面の国内株式は前営業日の終値
+JP_MARKET_CLOSE = time(15, 30)   # 東証の大引け
+NAV_PUBLISHED = time(18, 0)      # 投資信託の基準価額が出そろう目安（17時台はまだ前日分だった）
+RECOMMENDED = "平日 21:00〜22:30"  # 国内は引け後、投信は公表後、米国はまだ開いていない時間帯
+
+
+def us_market_open(d: date) -> time:
+    """米国市場の寄り付き（日本時間）。夏時間は22:30、冬時間は23:30。"""
+    def nth_sunday(month: int, n: int) -> date:
+        first = d.replace(month=month, day=1)
+        return first + timedelta(days=(6 - first.weekday()) % 7 + 7 * (n - 1))
+
+    dst = nth_sunday(3, 2) <= d < nth_sunday(11, 1)
+    return time(22, 30) if dst else time(23, 30)
 
 
 def timing_notes(mtime: datetime, result: ParseResult, today: date) -> list[str]:
     """保存時刻から「その画面がいつの値か」を判断して助言する。
 
     取込日はファイルの更新日時から決まるので、保存し直すのを忘れると前の日に入る。
-    国内株式は大引け前に保存すると前営業日の終値のままになる（投資信託の基準価額は前夕に
-    公表済みなので朝の保存でも当日更新される。米国株も前夜に引けているので朝でよい）。
+    国内株式は大引け前だと前営業日の終値、投資信託は夕方の公表前だとその日の基準価額が出ておらず、
+    米国株式は寄り付き後だと場中の値になる。3つが揃うのが RECOMMENDED の時間帯。
     """
     notes = []
     if mtime.date() < today:
         notes.append(f"{mtime:%m/%d %H:%M} 保存のファイルです。{mtime:%Y-%m-%d} 分として取り込みました。"
                      "今日の値にするには保存し直してください")
-    if (any(h.asset_class == "国内株式" for h in result.holdings)
-            and mtime.weekday() < 5 and mtime.time() < JP_MARKET_CLOSE):
-        notes.append(f"{mtime:%H:%M} 保存なので国内株式は前営業日の終値です。"
-                     "当日の終値を入れるなら 15:30 以降に保存し直してください")
+    if mtime.weekday() >= 5:      # 土日は市場が動かないので保存時刻を問わない
+        return notes
+
+    at, has = mtime.time(), lambda c: any(h.asset_class == c for h in result.holdings)
+    if has("国内株式") and at < JP_MARKET_CLOSE:
+        notes.append(f"{mtime:%H:%M} 保存なので国内株式は前営業日の終値です（東証は 15:30 引け）。"
+                     f"当日の終値を入れるなら {RECOMMENDED} に保存し直してください")
+    if result.funds and at < NAV_PUBLISHED:
+        notes.append(f"{mtime:%H:%M} 保存なので投資信託は当日公表分の基準価額ではない可能性があります。"
+                     f"{RECOMMENDED} に保存し直すと揃います")
+    if has("米国株式") and at >= us_market_open(mtime.date()):
+        notes.append(f"{mtime:%H:%M} 保存なので米国株式は場中の値です（寄り付き "
+                     f"{us_market_open(mtime.date()):%H:%M}）。前夜の終値で揃えるなら "
+                     f"{RECOMMENDED} に保存してください")
     return notes
 
 
