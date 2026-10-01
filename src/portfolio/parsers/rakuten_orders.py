@@ -9,6 +9,7 @@ table.pcmm-foreign-stock-tbl--inquiry の tr が1注文。td 内は ul > li に�
   td5: 注文数量 / 約定数量 / 注文単価
   td6: 約定日 等
 td が1つだけの tr は直前の注文の補足行（逆指値条件、IFD など）。
+注文が0件だとテーブルごと出ず、代わりに「該当する情報はありません。」とだけ表示される。
 """
 from __future__ import annotations
 
@@ -23,10 +24,15 @@ from portfolio.parsers._num import to_float
 _TIME_RE = re.compile(r"(\d{2})/(\d{2}) (\d{2}:\d{2})")
 _YMD_RE = re.compile(r"(\d{4})/(\d{2})/(\d{2})")
 _ORDER_NO_RE = re.compile(r"^\s*(\S+)(?:\s*\((\S+)\))?", re.S)
+_TABLE = "pcmm-foreign-stock-tbl--inquiry"
+_PAGE_TITLE = "米国株式取引 注文照会・訂正・取消"
+_EMPTY = "該当する情報はありません"
 
 
 def matches(html: str) -> bool:
-    return "楽天証券" in html and "pcmm-foreign-stock-tbl--inquiry" in html
+    # 注文が0件だと注文テーブルごと出ないので、画面名と空表示の文言でも注文画面と判定する。
+    # 空表示の文言は保有商品一覧にも出るため、画面名と揃ったときだけ拾う。
+    return "楽天証券" in html and (_TABLE in html or (_PAGE_TITLE in html and _EMPTY in html))
 
 
 def parse(html: str, year_hint: int | None = None) -> ParseResult:
@@ -36,9 +42,10 @@ def parse(html: str, year_hint: int | None = None) -> ParseResult:
     snapshot_date = _snapshot_date(soup, year_hint)
     snap = snapshot_date or date.today()
 
-    table = soup.select_one("table.pcmm-foreign-stock-tbl--inquiry")
+    table = soup.select_one(f"table.{_TABLE}")
     if table is None:
-        warnings.append("楽天注文: 注文テーブルが見つかりません")
+        warnings.append("楽天注文: 注文行が見つかりませんでした（注文なし）" if _EMPTY in html
+                        else "楽天注文: 注文テーブルが見つかりません")
         return ParseResult("rakuten", snapshot_date, warnings=warnings, kind="orders")
 
     for tr in table.find_all("tr"):

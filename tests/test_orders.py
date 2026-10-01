@@ -28,6 +28,24 @@ def test_sbi_orders_page_with_no_orders():
     assert res.warnings and "注文行が見つかりませんでした" in res.warnings[0]
 
 
+def test_rakuten_orders_page_with_no_orders():
+    """注文が0件だと注文テーブルごと消えるが、判定不能にせず注文画面として 0 件で返す。"""
+    html = ('<html><head><title>米国株式取引 注文照会・訂正・取消 | 注文 | 外国株式 | 楽天証券[PC]</title></head>'
+            '<body><h1>米国株式取引 注文照会・訂正・取消</h1>'
+            '<div><span class="pcmm-art__hdg">該当する情報はありません。</span></div>'
+            '</body></html>')
+    assert detect(html) == ("rakuten", "orders")
+    res = parse_html(html, year_hint=2026)
+    assert res.kind == "orders" and res.orders == []
+    assert res.warnings == ["楽天注文: 注文行が見つかりませんでした（注文なし）"]
+    assert res.snapshot_date is None  # 画面に時刻が出ないので、取込側がファイルの更新日時で補う
+
+    # 同じ空表示の文言は保有商品一覧にも出る（該当なしの商品区分）。注文画面とは判定しない
+    holdings = decode_html((FIX / "rakuten_possess_all.html").read_bytes())
+    holdings = holdings.replace("</body>", "<span>該当する情報はありません。</span></body>")
+    assert detect(holdings) == ("rakuten", "holdings")
+
+
 def test_sbi_orders_parse():
     res = sbi_orders.parse(decode_html((FIX / "sbi_foreign_orders.html").read_bytes()))
     assert res.kind == "orders" and res.warnings == []
