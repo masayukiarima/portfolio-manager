@@ -8,6 +8,7 @@ from pathlib import Path
 from portfolio.models import Balance, Fund, Holding, Order
 
 DEFAULT_DB = Path("portfolio.db")
+NO_ORDERS_SOURCE = "(注文照会の保存なし)"   # raw_imports.source_file。原本なしで注文0件とした日の目印
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS holdings (
@@ -349,3 +350,13 @@ def record_raw_import(conn: sqlite3.Connection, *, snapshot_date: str, broker: s
              datetime.now().isoformat(timespec="seconds"), content, kind),
         )
     return cur.rowcount == 1
+
+
+def record_no_orders(conn: sqlite3.Connection, *, snapshot_date: str, broker: str) -> bool:
+    """注文照会を保存しなかった日を「注文0件の取込」として残す。新規登録なら True。
+
+    原本の HTML が無いので、日付と証券会社を内容の代わりにする（同じ日は二重登録されない）。
+    """
+    return record_raw_import(conn, snapshot_date=snapshot_date, broker=broker,
+                             source_file=NO_ORDERS_SOURCE, row_count=0, kind="orders",
+                             content=f"no orders: {broker} {snapshot_date}".encode())

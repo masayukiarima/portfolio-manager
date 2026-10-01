@@ -1,4 +1,5 @@
-from datetime import date
+import os
+from datetime import date, datetime
 from pathlib import Path
 
 from portfolio import db as dbmod
@@ -184,3 +185,74 @@ def test_empty_orders_capture_supersedes_older_orders(tmp_path):
     assert conn.execute("SELECT * FROM latest_orders").fetchall() == []
     # 取込前の日付で見れば、その時点で有効だった注文は残っている
     assert len(latest_orders(conn, "2026-09-05")) == len(res.orders)
+
+
+def _save(path: Path, content: bytes, day: int) -> None:
+    """2026-08-<day> 21:30 に保存したファイルとして置く（楽天は年を、空の注文照会は日付ごと更新日時から取る）。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    at = datetime(2026, 8, day, 21, 30).timestamp()
+    os.utime(path, (at, at))
+
+
+def test_import_assumes_no_orders_when_orders_page_was_not_saved(tmp_path, monkeypatch, capsys):
+    """保有一覧だけ保存し直した日は、注文照会が古いまま（または無い）でも注文なしとして取り込む。"""
+    from portfolio.cli import main
+
+    monkeypatch.chdir(tmp_path)
+    db = str(tmp_path / "t.db")
+    holdings, orders = tmp_path / "imports" / "h.html", tmp_path / "imports" / "orders" / "o.html"
+    _save(orders, (FIX / "rakuten_orders.html").read_bytes(), 29)
+    assert main(["import", "--db", db, str(orders), "--date", "2026-08-28"]) == 0   # 前日の注文 3 件
+    orders.unlink()
+    _save(holdings, (FIX / "rakuten_possess_all.html").read_bytes(), 29)
+    capsys.readouterr()
+
+    # ファイルを指定した取込では、注文照会が無くても何も推測しない
+    assert main(["import", "--db", db, str(holdings)]) == 0
+    assert "注文なし" not in capsys.readouterr().out
+
+    assert main(["import", "--db", db, "--dry-run"]) == 0
+    assert "[dry-run] rakuten: imports/orders に 2026-08-29 分の注文照会が無いため" in capsys.readouterr().out
+    conn = dbmod.connect(Path(db))
+    assert len(conn.execute("SELECT * FROM latest_orders").fetchall()) == 3   # dry-run では書かない
+
+    assert main(["import", "--db", db]) == 0
+    out = capsys.readouterr().out
+    assert "[note] rakuten: imports/orders に 2026-08-29 分の注文照会が無いため、注文なし（0件）として処理しました" in out
+    assert "2026-08-28 取込の 3 件は最新の注文から外れます" in out
+    assert conn.execute("SELECT * FROM latest_orders").fetchall() == []
+    assert latest_orders(conn, "2026-08-29") == [] and len(latest_orders(conn, "2026-08-28")) == 3
+    marks = "SELECT snapshot_date, broker, kind, row_count FROM raw_imports WHERE source_file = ?"
+    assert [tuple(r) for r in conn.execute(marks, (dbmod.NO_ORDERS_SOURCE,))] == [("2026-08-29", "rakuten", "orders", 0)]
+
+    # 古い注文照会がフォルダに残っていても同じ。保存し直しは勧めず、同じ日を二重には記録しない
+    _save(orders, "<title>米国株式取引 注文照会・訂正・取消 | 楽天証券[PC]</title>"
+                  "<span>該当する情報はありません。</span>".encode("euc_jp"), 28)
+    assert main(["import", "--db", db]) == 0
+    out = capsys.readouterr().out
+    assert "rakuten 2026-08-28 orders 0件" in out and "注文なし（0件）として処理しました (記録済み)" in out
+    assert [line for line in out.splitlines() if "o.html" in line and "保存し直してください" in line] == []
+    assert len(conn.execute(marks, (dbmod.NO_ORDERS_SOURCE,)).fetchall()) == 1
+
+
+def test_import_keeps_orders_when_orders_page_is_current(tmp_path, monkeypatch, capsys):
+    from portfolio.cli import main
+
+    monkeypatch.chdir(tmp_path)
+    db = str(tmp_path / "t.db")
+    _save(tmp_path / "imports" / "h.html", (FIX / "rakuten_possess_all.html").read_bytes(), 29)
+    _save(tmp_path / "imports" / "orders" / "o.html", (FIX / "rakuten_orders.html").read_bytes(), 29)
+    assert main(["import", "--db", db]) == 0
+    assert "注文なし" not in capsys.readouterr().out
+    conn = dbmod.connect(Path(db))
+    assert len(conn.execute("SELECT * FROM latest_orders").fetchall()) == 3
+    marks = "SELECT COUNT(*) FROM raw_imports WHERE source_file = ?"
+    assert conn.execute(marks, (dbmod.NO_ORDERS_SOURCE,)).fetchone()[0] == 0
+
+    # 取込後に注文照会を片付けて取り込み直しても、その日の注文は取込済みなので何も足さない
+    (tmp_path / "imports" / "orders" / "o.html").unlink()
+    assert main(["import", "--db", db]) == 0
+    assert "注文なし" not in capsys.readouterr().out
+    assert len(conn.execute("SELECT * FROM latest_orders").fetchall()) == 3
+    assert conn.execute(marks, (dbmod.NO_ORDERS_SOURCE,)).fetchone()[0] == 0

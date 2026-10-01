@@ -26,6 +26,14 @@ def test_file_saved_on_an_earlier_day_is_called_out():
     assert "09/10 21:30 保存" in notes[0] and "2026-09-10 分として取り込みました" in notes[0]
 
 
+def test_stale_orders_page_is_not_asked_to_be_saved_again():
+    """注文照会は保存し直さなくてもその日は注文なしとして扱うので、保存し直しを勧めない。"""
+    stale = datetime(2026, 9, 10, 21, 30)
+    assert "保存し直してください" in timing_notes(stale, _result("米国株式"), FRI)[0]
+    notes = timing_notes(stale, ParseResult("sbi", FRI, kind="orders"), FRI)
+    assert len(notes) == 1 and notes[0].endswith("2026-09-10 分として取り込みました。")
+
+
 def test_recommended_window_is_quiet():
     at = datetime(2026, 9, 11, 21, 30)
     assert timing_notes(at, _result("国内株式", "米国株式", funds=True), FRI) == []

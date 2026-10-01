@@ -35,8 +35,9 @@ def timing_notes(mtime: datetime, result: ParseResult, today: date) -> list[str]
     """
     notes = []
     if mtime.date() < today:
-        notes.append(f"{mtime:%m/%d %H:%M} 保存のファイルです。{mtime:%Y-%m-%d} 分として取り込みました。"
-                     "今日の値にするには保存し直してください")
+        # 注文照会は保存し直さなくてよい（その日は注文なしとして扱う。assume_no_orders）
+        advice = "" if result.kind == "orders" else "今日の値にするには保存し直してください"
+        notes.append(f"{mtime:%m/%d %H:%M} 保存のファイルです。{mtime:%Y-%m-%d} 分として取り込みました。{advice}")
     if mtime.weekday() >= 5:      # 土日は市場が動かないので保存時刻を問わない
         return notes
 
@@ -85,11 +86,39 @@ def _expand(pattern: str) -> list[Path]:
     )
 
 
+def assume_no_orders(conn, newest: dict[str, date], ordered: dict[str, date], dry_run: bool) -> None:
+    """注文照会を保存し直さなかった証券会社は、その日を注文なし（0件）として記録する。
+
+    newest は注文照会以外、ordered は注文照会の、今回取り込んだ最も新しい日付（証券会社ごと）。
+    保有一覧だけ新しければ「注文が無いので保存しなかった」とみなす。0件の取込として残すことで、
+    前回までの注文が最新のまま残らないようにする（latest_orders）。
+    """
+    for broker, snap in sorted(newest.items()):
+        if ordered.get(broker, date.min) >= snap:
+            continue
+        # その日の注文照会を取込済みなら（取込後にファイルを片付けた場合など）何もしない
+        if conn.execute("SELECT 1 FROM raw_imports WHERE broker = ? AND kind LIKE '%orders%' "
+                        "AND snapshot_date >= ? AND source_file != ?",
+                        (broker, snap.isoformat(), dbmod.NO_ORDERS_SOURCE)).fetchone():
+            continue
+        text =f"{broker}: imports/orders に {snap} 分の注文照会が無いため、注文なし（0件）として"
+        stale = conn.execute("SELECT COUNT(*) n, MAX(snapshot_date) d FROM latest_orders "
+                             "WHERE broker = ? AND snapshot_date < ?", (broker, snap.isoformat())).fetchone()
+        dropped = f"。{stale['d']} 取込の {stale['n']} 件は最新の注文から外れます" if stale["n"] else ""
+        if dry_run:
+            print(f"[dry-run] {text}処理します{dropped}")
+            continue
+        new = dbmod.record_no_orders(conn, snapshot_date=snap.isoformat(), broker=broker)
+        print(f"[note] {text}処理しました{dropped}{'' if new else ' (記録済み)'}")
+
+
 def cmd_import(args: argparse.Namespace) -> int:
     override = date.fromisoformat(args.date) if args.date else None
     conn = dbmod.connect(Path(args.db))
     status = 0
     patterns = args.files or [DEFAULT_IMPORT_GLOB]
+    newest: dict[str, date] = {}    # 証券会社ごとの最も新しい取込日（注文照会以外）
+    ordered: dict[str, date] = {}   # 同（注文照会）
     for pattern in patterns:
         paths = _expand(pattern)
         if not paths:
@@ -105,6 +134,8 @@ def cmd_import(args: argparse.Namespace) -> int:
             for w in result.warnings:
                 print(f"[warn] {path.name}: {w}", file=sys.stderr)
             snap = result.snapshot_date
+            seen = ordered if result.kind == "orders" else newest
+            seen[result.broker] = max(snap, seen.get(result.broker, snap))
             # 1ページに複数種別が載ることがある（楽天: holdings+balances、SBI保有証券一覧: holdings+funds）
             parts = [(k, v) for k, v in (("holdings", result.holdings), ("orders", result.orders),
                                          ("funds", result.funds), ("balances", result.balances)) if v]
@@ -130,6 +161,9 @@ def cmd_import(args: argparse.Namespace) -> int:
             print(f"[ok] {path.name}: {label} 取込{again}")
             for t in notes:
                 print(f"[note] {path.name}: {t}")
+    # ファイルを指定した取込では、指定されなかった注文照会が「保存されていない」とは言えない
+    if not args.files:
+        assume_no_orders(conn, newest, ordered, args.dry_run)
     return status
 
 
